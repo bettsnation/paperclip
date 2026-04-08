@@ -3,6 +3,7 @@ import type { Db } from "@paperclipai/db";
 import {
   activityLog,
   agents,
+  approvals,
   assets,
   companies,
   companyMemberships,
@@ -10,6 +11,7 @@ import {
   goals,
   heartbeatRuns,
   executionWorkspaces,
+  issueApprovals,
   issueAttachments,
   issueInboxArchives,
   issueLabels,
@@ -19,6 +21,8 @@ import {
   issueReadStates,
   issues,
   labels,
+  pipelineRuns,
+  pipelineStages,
   projectWorkspaces,
   projects,
 } from "@paperclipai/db";
@@ -63,6 +67,246 @@ function applyStatusSideEffects(
   }
   return patch;
 }
+
+// ---------------------------------------------------------------------------
+// Pipeline status-transition enforcement
+// ---------------------------------------------------------------------------
+
+/** Which issue statuses are valid per pipeline stage type. */
+const STAGE_ALLOWED_STATUSES: Record<string, readonly string[]> = {
+  action:   ["todo", "in_progress", "blocked", "done", "cancelled"],
+  review:   ["in_review", "in_progress", "blocked", "done", "cancelled"],
+  approval: ["in_review", "in_progress", "blocked", "done", "cancelled"],
+};
+
+/** The status that triggers stage completion for each stage type. */
+const STAGE_COMPLETE_STATUS = "done";
+
+/** Statuses that trigger a rejection for review/approval stages. */
+const STAGE_REJECT_STATUSES = new Set(["in_progress"]);
+
+/** The default issue status when entering a stage of a given type. */
+function defaultStatusForStageType(stageType: string): string {
+  switch (stageType) {
+    case "review":
+    case "approval":
+      return "in_review";
+    default:
+      return "todo";
+  }
+}
+
+interface PipelineAction {
+  /** The pipeline run ID this action applies to. */
+  pipelineRunId: string;
+  /** Status to write to the issue (may differ from what the caller requested). */
+  overrideStatus?: string;
+  /** Agent to assign for the next stage. null = clear agent assignment. */
+  overrideAssigneeAgentId?: string | null;
+  /** Pipeline run fields to update. */
+  runPatch: Partial<typeof pipelineRuns.$inferInsert>;
+  /** If set, create an approval and link it to the issue. */
+  createApproval?: {
+    companyId: string;
+    type: string;
+    payload: Record<string, unknown>;
+    requestedByAgentId?: string | null;
+  };
+}
+
+/**
+ * Evaluate pipeline enforcement for an issue status change.
+ *
+ * Returns `null` when the issue has no active pipeline run (backward-compat).
+ * Returns a `PipelineAction` describing side-effects to apply inside the
+ * same transaction.
+ * Throws 409 when the transition is invalid for the current pipeline stage.
+ */
+async function evaluatePipelineTransition(
+  tx: any,
+  existing: typeof issues.$inferSelect,
+  newStatus: string,
+): Promise<PipelineAction | null> {
+  // 1. Find an active pipeline run for this issue
+  const run = await tx
+    .select()
+    .from(pipelineRuns)
+    .where(and(eq(pipelineRuns.issueId, existing.id), eq(pipelineRuns.status, "running")))
+    .then((rows: Array<typeof pipelineRuns.$inferSelect>) => rows[0] ?? null);
+
+  if (!run || !run.currentStageId) return null;
+
+  // 2. Get the current stage
+  const currentStage = await tx
+    .select()
+    .from(pipelineStages)
+    .where(eq(pipelineStages.id, run.currentStageId))
+    .then((rows: Array<typeof pipelineStages.$inferSelect>) => rows[0] ?? null);
+
+  if (!currentStage) return null;
+
+  // 3. Validate the new status against the current stage type
+  const allowed = STAGE_ALLOWED_STATUSES[currentStage.stageType] ?? STAGE_ALLOWED_STATUSES.action;
+  if (!allowed.includes(newStatus)) {
+    throw conflict(
+      `Pipeline stage "${currentStage.name}" (${currentStage.stageType}) does not allow status "${newStatus}"`,
+    );
+  }
+
+  // 4. If not a completion or rejection trigger, nothing else to do
+  const isCompletion = newStatus === STAGE_COMPLETE_STATUS;
+  const isRejection =
+    (currentStage.stageType === "review" || currentStage.stageType === "approval") &&
+    STAGE_REJECT_STATUSES.has(newStatus);
+
+  if (!isCompletion && !isRejection) {
+    return { pipelineRunId: run.id, runPatch: {} };
+  }
+
+  // Fetch all stages in order for advancement / regression
+  const allStages = await tx
+    .select()
+    .from(pipelineStages)
+    .where(eq(pipelineStages.pipelineId, run.pipelineId))
+    .orderBy(asc(pipelineStages.stageOrder));
+
+  const currentIdx = allStages.findIndex((s) => s.id === currentStage.id);
+
+  // ---------- COMPLETION ----------
+  if (isCompletion) {
+    return { pipelineRunId: run.id, ...resolveCompletion(existing, run, currentStage, allStages, currentIdx) };
+  }
+
+  // ---------- REJECTION ----------
+  return { pipelineRunId: run.id, ...resolveRejection(existing, run, currentStage, allStages, currentIdx) };
+}
+
+function resolveCompletion(
+  existing: typeof issues.$inferSelect,
+  run: typeof pipelineRuns.$inferSelect,
+  currentStage: typeof pipelineStages.$inferSelect,
+  allStages: Array<typeof pipelineStages.$inferSelect>,
+  currentIdx: number,
+): Omit<PipelineAction, "pipelineRunId"> {
+  if (currentStage.onComplete === "done" || currentIdx >= allStages.length - 1) {
+    // Pipeline complete — issue stays "done", run marked completed
+    return {
+      runPatch: { status: "completed", currentStageId: currentStage.id, updatedAt: new Date() },
+    };
+  }
+
+  // Advance to next stage
+  const nextStage = allStages[currentIdx + 1];
+  const nextStatus = defaultStatusForStageType(nextStage.stageType);
+
+  const action: Omit<PipelineAction, "pipelineRunId"> = {
+    overrideStatus: nextStatus,
+    overrideAssigneeAgentId: nextStage.agentId ?? null,
+    runPatch: { currentStageId: nextStage.id, updatedAt: new Date() },
+  };
+
+  // Auto-create approval when entering an approval stage
+  if (nextStage.stageType === "approval") {
+    action.createApproval = {
+      companyId: existing.companyId,
+      type: "pipeline_stage_approval",
+      payload: {
+        title: `Approval required: ${nextStage.name}`,
+        summary: `Pipeline stage "${nextStage.name}" requires approval before the issue can proceed.`,
+        pipelineRunId: run.id,
+        pipelineStageId: nextStage.id,
+        issueId: existing.id,
+      },
+      requestedByAgentId: existing.assigneeAgentId,
+    };
+  }
+
+  return action;
+}
+
+function resolveRejection(
+  existing: typeof issues.$inferSelect,
+  run: typeof pipelineRuns.$inferSelect,
+  currentStage: typeof pipelineStages.$inferSelect,
+  allStages: Array<typeof pipelineStages.$inferSelect>,
+  currentIdx: number,
+): Omit<PipelineAction, "pipelineRunId"> {
+  switch (currentStage.onReject) {
+    case "previous": {
+      if (currentIdx <= 0) {
+        // No previous stage — treat as stop
+        return {
+          overrideStatus: "blocked",
+          runPatch: { status: "failed", updatedAt: new Date() },
+        };
+      }
+      const prevStage = allStages[currentIdx - 1];
+      return {
+        overrideStatus: defaultStatusForStageType(prevStage.stageType),
+        overrideAssigneeAgentId: prevStage.agentId ?? null,
+        runPatch: { currentStageId: prevStage.id, updatedAt: new Date() },
+      };
+    }
+
+    case "restart": {
+      const firstStage = allStages[0];
+      return {
+        overrideStatus: defaultStatusForStageType(firstStage.stageType),
+        overrideAssigneeAgentId: firstStage.agentId ?? null,
+        runPatch: { currentStageId: firstStage.id, updatedAt: new Date() },
+      };
+    }
+
+    default: // "stop"
+      return {
+        overrideStatus: "blocked",
+        runPatch: { status: "failed", updatedAt: new Date() },
+      };
+  }
+}
+
+/**
+ * Apply the pipeline side-effects inside the transaction after the issue
+ * has been updated.
+ */
+async function applyPipelineAction(
+  tx: any,
+  issueId: string,
+  run: { id: string },
+  action: PipelineAction,
+) {
+  // Update pipeline run
+  if (Object.keys(action.runPatch).length > 0) {
+    await tx
+      .update(pipelineRuns)
+      .set(action.runPatch)
+      .where(eq(pipelineRuns.id, run.id));
+  }
+
+  // Create approval if needed
+  if (action.createApproval) {
+    const [approval] = await tx
+      .insert(approvals)
+      .values({
+        companyId: action.createApproval.companyId,
+        type: action.createApproval.type,
+        requestedByAgentId: action.createApproval.requestedByAgentId ?? null,
+        payload: action.createApproval.payload,
+      })
+      .returning();
+
+    // Link approval to issue
+    if (approval) {
+      await tx.insert(issueApprovals).values({
+        companyId: action.createApproval.companyId,
+        issueId,
+        approvalId: approval.id,
+      });
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 
 export interface IssueFilters {
   status?: string;
@@ -1649,6 +1893,36 @@ export function issueService(db: Db) {
       }
 
       const runUpdate = async (tx: any) => {
+        // --- Pipeline enforcement (inside tx for consistency) ---
+        let pipelineAction: PipelineAction | null = null;
+        if (issueData.status && issueData.status !== existing.status) {
+          pipelineAction = await evaluatePipelineTransition(tx, existing, issueData.status);
+          if (pipelineAction) {
+            if (pipelineAction.overrideStatus) {
+              patch.status = pipelineAction.overrideStatus;
+              // Re-apply status side-effects with the overridden status
+              applyStatusSideEffects(pipelineAction.overrideStatus, patch);
+              if (pipelineAction.overrideStatus !== "done") patch.completedAt = null;
+              if (pipelineAction.overrideStatus !== "cancelled") patch.cancelledAt = null;
+              if (pipelineAction.overrideStatus !== "in_progress") {
+                patch.checkoutRunId = null;
+                patch.executionRunId = null;
+                patch.executionAgentNameKey = null;
+                patch.executionLockedAt = null;
+              }
+            }
+            if (pipelineAction.overrideAssigneeAgentId !== undefined) {
+              patch.assigneeAgentId = pipelineAction.overrideAssigneeAgentId;
+              patch.assigneeUserId = null;
+              // Clear execution lock on reassignment
+              patch.checkoutRunId = null;
+              patch.executionRunId = null;
+              patch.executionAgentNameKey = null;
+              patch.executionLockedAt = null;
+            }
+          }
+        }
+
         const defaultCompanyGoal = await getDefaultCompanyGoal(tx, existing.companyId);
         const [currentProjectGoalId, nextProjectGoalId] = await Promise.all([
           getProjectDefaultGoalId(tx, existing.companyId, existing.projectId),
@@ -1689,6 +1963,12 @@ export function issueService(db: Db) {
             tx,
           );
         }
+
+        // --- Apply pipeline side-effects after issue update ---
+        if (pipelineAction) {
+          await applyPipelineAction(tx, updated.id, { id: pipelineAction.pipelineRunId }, pipelineAction);
+        }
+
         const [enriched] = await withIssueLabels(tx, [updated]);
         return enriched;
       };
