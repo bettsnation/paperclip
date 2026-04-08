@@ -204,6 +204,11 @@ export type {
   CompanyPortabilityExportRequest,
 } from "./company-portability.js";
 export type {
+  Pipeline,
+  PipelineStage,
+  PipelineRun,
+} from "./pipeline.js";
+export type {
   JsonSchema,
   PluginJobDeclaration,
   PluginWebhookDeclaration,
