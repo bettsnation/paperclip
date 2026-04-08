@@ -21,6 +21,7 @@ import {
   issueReadStates,
   issues,
   labels,
+  pipelines,
   pipelineRuns,
   pipelineStages,
   projectWorkspaces,
@@ -1793,7 +1794,56 @@ export function issueService(db: Db) {
             tx,
           );
         }
-        const [enriched] = await withIssueLabels(tx, [issue]);
+
+        // --- Pipeline auto-start: if the project has an active pipeline, create a run ---
+        let pipelineIssue = issue;
+        if (issue.projectId) {
+          const pipeline = await tx
+            .select()
+            .from(pipelines)
+            .where(
+              and(
+                eq(pipelines.projectId, issue.projectId),
+                eq(pipelines.status, "active"),
+              ),
+            )
+            .then((rows) => rows[0] ?? null);
+
+          if (pipeline) {
+            const stages = await tx
+              .select()
+              .from(pipelineStages)
+              .where(eq(pipelineStages.pipelineId, pipeline.id))
+              .orderBy(asc(pipelineStages.stageOrder));
+
+            if (stages.length > 0) {
+              const firstStage = stages[0];
+
+              await tx.insert(pipelineRuns).values({
+                pipelineId: pipeline.id,
+                issueId: issue.id,
+                currentStageId: firstStage.id,
+                status: "running",
+              });
+
+              // Assign issue to first stage agent (if the stage has one)
+              if (firstStage.agentId) {
+                const [updated] = await tx
+                  .update(issues)
+                  .set({
+                    assigneeAgentId: firstStage.agentId,
+                    assigneeUserId: null,
+                    updatedAt: new Date(),
+                  })
+                  .where(eq(issues.id, issue.id))
+                  .returning();
+                pipelineIssue = updated;
+              }
+            }
+          }
+        }
+
+        const [enriched] = await withIssueLabels(tx, [pipelineIssue]);
         return enriched;
       });
     },
