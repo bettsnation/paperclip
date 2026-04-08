@@ -1225,6 +1225,11 @@ export function issueRoutes(
     Object.assign(updateFields, transition.patch);
 
     let issue;
+    // Capture pipeline reassignment for explicit wakeup (workaround for routing bug #2730)
+    let pipelineReassignedAgent: { id: string; assigneeAgentId: string; status: string } | null = null;
+    const onPipelineReassignment = (info: { id: string; assigneeAgentId: string; status: string }) => {
+      pipelineReassignedAgent = info;
+    };
     try {
       if (transition.decision && decisionId) {
         const decision = transition.decision;
@@ -1237,6 +1242,7 @@ export function issueRoutes(
               actorUserId: actor.actorType === "user" ? actor.actorId : null,
             },
             tx,
+            { onPipelineReassignment },
           );
           if (!updated) return null;
 
@@ -1260,7 +1266,7 @@ export function issueRoutes(
           ...updateFields,
           actorAgentId: actor.agentId ?? null,
           actorUserId: actor.actorType === "user" ? actor.actorId : null,
-        });
+        }, undefined, { onPipelineReassignment });
       }
     } catch (err) {
       if (err instanceof HttpError && err.status === 422) {
@@ -1443,6 +1449,25 @@ export function issueRoutes(
             issueId: issue.id,
             source: "issue.update",
             ...(interruptedRunId ? { interruptedRunId } : {}),
+          },
+        });
+      }
+
+      // Explicit pipeline reassignment wakeup (workaround for routing bug #2730).
+      // Even though assigneeChanged already fires a generic wakeup above, this
+      // ensures the new agent is woken with a pipeline-specific reason so the
+      // heartbeat correctly picks up the reassigned issue.
+      if (pipelineReassignedAgent && pipelineReassignedAgent.assigneeAgentId) {
+        addWakeup(pipelineReassignedAgent.assigneeAgentId, {
+          source: "automation",
+          triggerDetail: "system",
+          reason: "pipeline_reassignment",
+          payload: { issueId: issue.id, mutation: "pipeline_stage_transition" },
+          requestedByActorType: actor.actorType,
+          requestedByActorId: actor.actorId,
+          contextSnapshot: {
+            issueId: issue.id,
+            source: "pipeline.reassignment",
           },
         });
       }
