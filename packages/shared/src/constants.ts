@@ -196,6 +196,21 @@ export type RoutineRunStatus = (typeof ROUTINE_RUN_STATUSES)[number];
 export const ROUTINE_RUN_SOURCES = ["schedule", "manual", "api", "webhook"] as const;
 export type RoutineRunSource = (typeof ROUTINE_RUN_SOURCES)[number];
 
+export const PIPELINE_STATUSES = ["active", "paused", "archived"] as const;
+export type PipelineStatus = (typeof PIPELINE_STATUSES)[number];
+
+export const PIPELINE_STAGE_TYPES = ["action", "review", "approval"] as const;
+export type PipelineStageType = (typeof PIPELINE_STAGE_TYPES)[number];
+
+export const PIPELINE_STAGE_ON_COMPLETE = ["next", "done"] as const;
+export type PipelineStageOnComplete = (typeof PIPELINE_STAGE_ON_COMPLETE)[number];
+
+export const PIPELINE_STAGE_ON_REJECT = ["stop", "previous", "restart"] as const;
+export type PipelineStageOnReject = (typeof PIPELINE_STAGE_ON_REJECT)[number];
+
+export const PIPELINE_RUN_STATUSES = ["pending", "running", "completed", "failed", "cancelled"] as const;
+export type PipelineRunStatus = (typeof PIPELINE_RUN_STATUSES)[number];
+
 export const PAUSE_REASONS = ["manual", "budget", "system"] as const;
 export type PauseReason = (typeof PAUSE_REASONS)[number];
 
