@@ -1,6 +1,7 @@
 export interface Pipeline {
   id: string;
   companyId: string;
+  projectId: string | null;
   name: string;
   status: string;
   createdAt: Date;
