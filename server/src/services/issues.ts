@@ -1807,6 +1807,10 @@ export function issueService(db: Db) {
         actorUserId?: string | null;
       },
       dbOrTx: any = db,
+      opts?: {
+        /** Called after a pipeline stage transition reassigns the issue to a new agent. Workaround for routing bug #2730. */
+        onPipelineReassignment?: (issue: { id: string; assigneeAgentId: string; status: string }) => void;
+      },
     ) => {
       const existing = await dbOrTx
         .select()
@@ -1919,6 +1923,14 @@ export function issueService(db: Db) {
               patch.executionRunId = null;
               patch.executionAgentNameKey = null;
               patch.executionLockedAt = null;
+              // Explicit wakeup for pipeline reassignment (workaround for routing bug #2730)
+              if (pipelineAction.overrideAssigneeAgentId && opts?.onPipelineReassignment) {
+                opts.onPipelineReassignment({
+                  id: existing.id,
+                  assigneeAgentId: pipelineAction.overrideAssigneeAgentId,
+                  status: patch.status ?? existing.status,
+                });
+              }
             }
           }
         }

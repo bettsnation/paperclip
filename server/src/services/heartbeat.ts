@@ -3780,6 +3780,9 @@ export function heartbeatService(db: Db) {
             .where(
               and(
                 eq(heartbeatRuns.companyId, issue.companyId),
+                // Scope to the current agent to prevent an old agent's orphaned run
+                // from re-locking the issue after pipeline reassignment (bug #2730).
+                eq(heartbeatRuns.agentId, agentId),
                 inArray(heartbeatRuns.status, ["queued", "running"]),
                 sql`${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issue.id}`,
               ),
