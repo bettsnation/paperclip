@@ -42,6 +42,7 @@ import { ApprovalCard } from "../components/ApprovalCard";
 import { InlineEditor } from "../components/InlineEditor";
 import { IssueChatThread } from "../components/IssueChatThread";
 import { IssueDocumentsSection } from "../components/IssueDocumentsSection";
+import { IssuePipelineProgress } from "../components/IssuePipelineProgress";
 import { IssueProperties } from "../components/IssueProperties";
 import { IssueWorkspaceCard } from "../components/IssueWorkspaceCard";
 import type { MentionOption } from "../components/MarkdownEditor";
@@ -1435,6 +1436,13 @@ export function IssueDetail() {
           }}
         />
       </div>
+
+      {issue.projectId && (
+        <IssuePipelineProgress
+          projectId={issue.projectId}
+          executionState={issue.executionState}
+        />
+      )}
 
       <PluginSlotOutlet
         slotTypes={["toolbarButton", "contextMenuItem"]}
