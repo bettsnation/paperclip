@@ -186,6 +186,17 @@ export {
 } from "./goal.js";
 
 export {
+  createPipelineSchema,
+  updatePipelineSchema,
+  createPipelineStageSchema,
+  updatePipelineStageSchema,
+  type CreatePipeline,
+  type UpdatePipeline,
+  type CreatePipelineStage,
+  type UpdatePipelineStage,
+} from "./pipeline.js";
+
+export {
   createApprovalSchema,
   resolveApprovalSchema,
   requestApprovalRevisionSchema,
