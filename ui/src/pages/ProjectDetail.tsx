@@ -446,6 +446,7 @@ function ProjectPipelineConfig({ projectId, companyId }: { projectId: string; co
   const queryClient = useQueryClient();
   const { pushToast } = useToast();
   const [selectedPipelineId, setSelectedPipelineId] = useState<string>("");
+  const [showChangePicker, setShowChangePicker] = useState(false);
 
   const { data: projectPipeline, isLoading: pipelineLoading } = useQuery({
     queryKey: queryKeys.pipelines.projectPipeline(projectId),
@@ -459,6 +460,12 @@ function ProjectPipelineConfig({ projectId, companyId }: { projectId: string; co
     enabled: !!companyId,
   });
 
+  const invalidatePipeline = () => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.pipelines.projectPipeline(projectId) });
+    setSelectedPipelineId("");
+    setShowChangePicker(false);
+  };
+
   const attachPipeline = useMutation({
     mutationFn: (pipelineId: string) => {
       const pipeline = (allPipelines ?? []).find((p) => p.id === pipelineId);
@@ -466,12 +473,17 @@ function ProjectPipelineConfig({ projectId, companyId }: { projectId: string; co
         name: pipeline?.name ?? "Pipeline",
       });
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.pipelines.projectPipeline(projectId) });
-      setSelectedPipelineId("");
-    },
+    onSuccess: invalidatePipeline,
     onError: (err) => {
       pushToast({ title: "Failed to attach pipeline", body: err.message, tone: "error" });
+    },
+  });
+
+  const detachPipeline = useMutation({
+    mutationFn: () => pipelinesApi.detachProjectPipeline(projectId),
+    onSuccess: invalidatePipeline,
+    onError: (err) => {
+      pushToast({ title: "Failed to detach pipeline", body: err.message, tone: "error" });
     },
   });
 
@@ -480,26 +492,56 @@ function ProjectPipelineConfig({ projectId, companyId }: { projectId: string; co
       <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Pipeline</h3>
       {pipelineLoading ? (
         <p className="text-sm text-muted-foreground">Loading...</p>
-      ) : projectPipeline ? (
-        <div className="flex items-center gap-3 rounded-md border border-border p-3">
-          <GitBranch className="h-4 w-4 text-muted-foreground shrink-0" />
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium">{projectPipeline.name}</p>
-            <p className="text-xs text-muted-foreground">Status: {projectPipeline.status}</p>
+      ) : projectPipeline && !showChangePicker ? (
+        <div className="space-y-2">
+          <div className="flex items-center gap-3 rounded-md border border-border p-3">
+            <GitBranch className="h-4 w-4 text-muted-foreground shrink-0" />
+            <div className="flex-1 min-w-0">
+              <button
+                className="text-sm font-medium text-foreground hover:underline text-left"
+                onClick={() => navigate(`/pipelines/${projectPipeline.id}`)}
+              >
+                {projectPipeline.name}
+              </button>
+              <p className="text-xs text-muted-foreground">Status: {projectPipeline.status}</p>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-xs"
+              onClick={() => navigate(`/pipelines/${projectPipeline.id}`)}
+            >
+              <ExternalLink className="h-3 w-3 mr-1" />
+              View
+            </Button>
           </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-xs"
-            onClick={() => navigate(`/pipelines/${projectPipeline.id}`)}
-          >
-            <ExternalLink className="h-3 w-3 mr-1" />
-            View
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setShowChangePicker(true)}
+            >
+              Change
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="text-destructive hover:text-destructive"
+              disabled={detachPipeline.isPending}
+              onClick={() => detachPipeline.mutate()}
+            >
+              {detachPipeline.isPending ? "Detaching..." : "Detach"}
+            </Button>
+          </div>
         </div>
       ) : (
         <div className="space-y-2">
-          <p className="text-sm text-muted-foreground">No pipeline attached to this project.</p>
+          {!showChangePicker && (
+            <p className="text-sm text-muted-foreground">No pipeline attached to this project.</p>
+          )}
+          {showChangePicker && (
+            <p className="text-sm text-muted-foreground">Select a different pipeline:</p>
+          )}
           {allPipelines && allPipelines.length > 0 && (
             <div className="flex items-center gap-2">
               <select
@@ -520,8 +562,17 @@ function ProjectPipelineConfig({ projectId, companyId }: { projectId: string; co
                   if (selectedPipelineId) attachPipeline.mutate(selectedPipelineId);
                 }}
               >
-                Attach
+                {attachPipeline.isPending ? "Attaching..." : "Attach"}
               </Button>
+              {showChangePicker && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setShowChangePicker(false)}
+                >
+                  Cancel
+                </Button>
+              )}
             </div>
           )}
         </div>
@@ -998,8 +1049,8 @@ export function ProjectDetail() {
             getFieldSaveState={(field) => fieldSaveStates[field] ?? "idle"}
             onArchive={(archived) => archiveProject.mutate(archived)}
             archivePending={archiveProject.isPending}
+            renderBeforeDangerZone={<ProjectPipelineConfig projectId={project.id} companyId={resolvedCompanyId!} />}
           />
-          <ProjectPipelineConfig projectId={project.id} companyId={resolvedCompanyId!} />
         </div>
       )}
 

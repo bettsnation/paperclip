@@ -20,11 +20,13 @@ import {
   ArrowRight,
   GripVertical,
   Layers,
+  Pencil,
   Plus,
   Trash2,
 } from "lucide-react";
 import { pipelinesApi } from "../api/pipelines";
 import { agentsApi } from "../api/agents";
+import { projectsApi } from "../api/projects";
 import { useCompany } from "../context/CompanyContext";
 import { usePanel } from "../context/PanelContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
@@ -42,7 +44,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { PipelineStage } from "@paperclipai/shared";
+import type { Agent, PipelineStage } from "@paperclipai/shared";
 
 const STAGE_TYPES = ["action", "review", "approval", "sub_pipeline"] as const;
 const ON_COMPLETE_OPTIONS = ["next", "done"] as const;
@@ -61,9 +63,10 @@ interface SortableStageProps {
   isLast: boolean;
   onUpdate: (data: Record<string, unknown>) => void;
   onDelete: () => void;
+  onEdit: () => void;
 }
 
-function SortableStage({ stage, agentName, isLast, onUpdate, onDelete }: SortableStageProps) {
+function SortableStage({ stage, agentName, isLast, onUpdate, onDelete, onEdit }: SortableStageProps) {
   const {
     attributes,
     listeners,
@@ -99,6 +102,9 @@ function SortableStage({ stage, agentName, isLast, onUpdate, onDelete }: Sortabl
             {stage.stageType}
           </span>
           <span className="flex-1 text-sm font-medium truncate">{stage.name}</span>
+          <Button variant="ghost" size="icon-xs" onClick={onEdit}>
+            <Pencil className="h-3.5 w-3.5 text-muted-foreground hover:text-foreground" />
+          </Button>
           <Button variant="ghost" size="icon-xs" onClick={onDelete}>
             <Trash2 className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" />
           </Button>
@@ -136,17 +142,228 @@ function SortableStage({ stage, agentName, isLast, onUpdate, onDelete }: Sortabl
   );
 }
 
+function EditStageDialog({
+  stage,
+  agents,
+  pipelines,
+  open,
+  onOpenChange,
+  onSave,
+}: {
+  stage: PipelineStage;
+  agents: Agent[];
+  pipelines: { id: string; name: string }[];
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSave: (data: Record<string, unknown>) => void;
+}) {
+  const [name, setName] = useState(stage.name);
+  const [stageType, setStageType] = useState(stage.stageType);
+  const [agentId, setAgentId] = useState<string>(stage.agentId ?? "__none__");
+  const [onComplete, setOnComplete] = useState(stage.onComplete);
+  const [onReject, setOnReject] = useState(stage.onReject);
+  const [timeoutMinutes, setTimeoutMinutes] = useState<string>(stage.timeoutMinutes?.toString() ?? "");
+  const [approverCount, setApproverCount] = useState<string>(stage.approverCount?.toString() ?? "1");
+  const [subPipelineId, setSubPipelineId] = useState<string>(stage.subPipelineId ?? "__none__");
+
+  useEffect(() => {
+    if (open) {
+      setName(stage.name);
+      setStageType(stage.stageType);
+      setAgentId(stage.agentId ?? "__none__");
+      setOnComplete(stage.onComplete);
+      setOnReject(stage.onReject);
+      setTimeoutMinutes(stage.timeoutMinutes?.toString() ?? "");
+      setApproverCount(stage.approverCount?.toString() ?? "1");
+      setSubPipelineId(stage.subPipelineId ?? "__none__");
+    }
+  }, [open, stage]);
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!name.trim()) return;
+    const data: Record<string, unknown> = {
+      name: name.trim(),
+      stageType,
+      agentId: agentId === "__none__" ? null : agentId,
+      onComplete,
+      onReject,
+      timeoutMinutes: timeoutMinutes ? parseInt(timeoutMinutes, 10) : null,
+    };
+    if (stageType === "approval") {
+      data.approverCount = parseInt(approverCount, 10) || 1;
+    }
+    if (stageType === "sub_pipeline") {
+      data.subPipelineId = subPipelineId === "__none__" ? null : subPipelineId;
+    }
+    onSave(data);
+    onOpenChange(false);
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <h3 className="text-lg font-semibold">Edit Stage</h3>
+        <form onSubmit={handleSubmit} className="space-y-4 mt-2">
+          <div>
+            <label className="text-sm font-medium">Name</label>
+            <input
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+            />
+          </div>
+
+          <div>
+            <label className="text-sm font-medium">Type</label>
+            <Select value={stageType} onValueChange={setStageType}>
+              <SelectTrigger className="mt-1">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {STAGE_TYPES.map((t) => (
+                  <SelectItem key={t} value={t}>
+                    {t === "sub_pipeline" ? "Sub-pipeline" : t.charAt(0).toUpperCase() + t.slice(1)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div>
+            <label className="text-sm font-medium">Assigned Agent</label>
+            <Select value={agentId} onValueChange={setAgentId}>
+              <SelectTrigger className="mt-1">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">No agent</SelectItem>
+                {agents.filter((a) => a.id).map((a) => (
+                  <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-sm font-medium">On Complete</label>
+              <Select value={onComplete} onValueChange={setOnComplete}>
+                <SelectTrigger className="mt-1">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {ON_COMPLETE_OPTIONS.map((o) => (
+                    <SelectItem key={o} value={o}>
+                      {o.charAt(0).toUpperCase() + o.slice(1)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <label className="text-sm font-medium">On Reject</label>
+              <Select value={onReject} onValueChange={setOnReject}>
+                <SelectTrigger className="mt-1">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {ON_REJECT_OPTIONS.map((o) => (
+                    <SelectItem key={o} value={o}>
+                      {o.charAt(0).toUpperCase() + o.slice(1)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div>
+            <label className="text-sm font-medium">Timeout (minutes)</label>
+            <input
+              type="number"
+              value={timeoutMinutes}
+              onChange={(e) => setTimeoutMinutes(e.target.value)}
+              placeholder="No timeout"
+              className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+            />
+          </div>
+
+          {stageType === "approval" && (
+            <div>
+              <label className="text-sm font-medium">Approvers Required</label>
+              <input
+                type="number"
+                min="1"
+                value={approverCount}
+                onChange={(e) => setApproverCount(e.target.value)}
+                className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+              />
+            </div>
+          )}
+
+          {stageType === "sub_pipeline" && (
+            <div>
+              <label className="text-sm font-medium">Sub-pipeline</label>
+              <Select value={subPipelineId} onValueChange={setSubPipelineId}>
+                <SelectTrigger className="mt-1">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">None</SelectItem>
+                  {pipelines.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" size="sm" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" size="sm" disabled={!name.trim()}>
+              Save
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function PipelineProperties({
   pipeline,
+  stageCount,
+  projectName,
   onUpdate,
 }: {
-  pipeline: { id: string; status: string; createdAt: Date | string; updatedAt: Date | string };
+  pipeline: { id: string; description?: string; status: string; projectId?: string | null; createdAt: Date | string; updatedAt: Date | string };
+  stageCount: number;
+  projectName: string | null;
   onUpdate: (data: Record<string, unknown>) => void;
 }) {
   return (
     <div className="space-y-4 text-sm">
       <h3 className="font-semibold text-xs uppercase text-muted-foreground tracking-wider">Properties</h3>
       <div className="space-y-3">
+        <div>
+          <label className="text-xs text-muted-foreground">Description</label>
+          <textarea
+            className="mt-1 w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs outline-none focus:ring-2 focus:ring-ring resize-none"
+            rows={3}
+            placeholder="Add a description..."
+            defaultValue={pipeline.description ?? ""}
+            onBlur={(e) => {
+              const val = e.target.value;
+              if (val !== (pipeline.description ?? "")) {
+                onUpdate({ description: val });
+              }
+            }}
+          />
+        </div>
         <div>
           <label className="text-xs text-muted-foreground">Status</label>
           <Select value={pipeline.status} onValueChange={(status) => onUpdate({ status })}>
@@ -159,6 +376,16 @@ function PipelineProperties({
               <SelectItem value="archived">Archived</SelectItem>
             </SelectContent>
           </Select>
+        </div>
+        {projectName && (
+          <div>
+            <label className="text-xs text-muted-foreground">Project</label>
+            <p className="text-xs mt-0.5 font-medium">{projectName}</p>
+          </div>
+        )}
+        <div>
+          <label className="text-xs text-muted-foreground">Stages</label>
+          <p className="text-xs mt-0.5">{stageCount} stage{stageCount !== 1 ? "s" : ""}</p>
         </div>
         <div>
           <label className="text-xs text-muted-foreground">Created</label>
@@ -182,6 +409,7 @@ export function PipelineDetail() {
   const queryClient = useQueryClient();
 
   const [showAddStage, setShowAddStage] = useState(false);
+  const [editingStage, setEditingStage] = useState<PipelineStage | null>(null);
   const [newStageName, setNewStageName] = useState("");
   const [newStageType, setNewStageType] = useState<string>("action");
   const [newStageAgentId, setNewStageAgentId] = useState<string>("__none__");
@@ -210,6 +438,22 @@ export function PipelineDetail() {
     queryFn: () => agentsApi.list(resolvedCompanyId!),
     enabled: !!resolvedCompanyId,
   });
+
+  const { data: allPipelines } = useQuery({
+    queryKey: queryKeys.pipelines.list(resolvedCompanyId!),
+    queryFn: () => pipelinesApi.list(resolvedCompanyId!),
+    enabled: !!resolvedCompanyId,
+  });
+
+  const { data: projects } = useQuery({
+    queryKey: queryKeys.projects.list(resolvedCompanyId!),
+    queryFn: () => projectsApi.list(resolvedCompanyId!),
+    enabled: !!resolvedCompanyId,
+  });
+
+  const projectName = pipeline?.projectId
+    ? (projects ?? []).find((p) => p.id === pipeline.projectId)?.name ?? null
+    : null;
 
   const agentMap = new Map((agents ?? []).map((a) => [a.id, a.name]));
 
@@ -241,12 +485,14 @@ export function PipelineDetail() {
       openPanel(
         <PipelineProperties
           pipeline={pipeline}
+          stageCount={stages?.length ?? 0}
+          projectName={projectName}
           onUpdate={(data) => updatePipeline.mutate(data)}
         />,
       );
     }
     return () => closePanel();
-  }, [pipeline]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pipeline, stages?.length, projectName]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const createStage = useMutation({
     mutationFn: (data: Record<string, unknown>) =>
@@ -361,6 +607,7 @@ export function PipelineDetail() {
                       isLast={gi === orderedGroups.length - 1}
                       onUpdate={(data) => updateStage.mutate({ stageId: group[0].id, data })}
                       onDelete={() => deleteStage.mutate(group[0].id)}
+                      onEdit={() => setEditingStage(group[0])}
                     />
                   ) : (
                     <div key={`group-${order}`} className="flex items-stretch gap-0">
@@ -377,6 +624,7 @@ export function PipelineDetail() {
                             isLast
                             onUpdate={(data) => updateStage.mutate({ stageId: stage.id, data })}
                             onDelete={() => deleteStage.mutate(stage.id)}
+                            onEdit={() => setEditingStage(stage)}
                           />
                         ))}
                       </div>
@@ -529,6 +777,17 @@ export function PipelineDetail() {
           </form>
         </DialogContent>
       </Dialog>
+
+      {editingStage && (
+        <EditStageDialog
+          stage={editingStage}
+          agents={agents ?? []}
+          pipelines={(allPipelines ?? []).filter((p) => p.id !== pipelineId).map((p) => ({ id: p.id, name: p.name }))}
+          open={!!editingStage}
+          onOpenChange={(open) => { if (!open) setEditingStage(null); }}
+          onSave={(data) => updateStage.mutate({ stageId: editingStage.id, data })}
+        />
+      )}
     </div>
   );
 }

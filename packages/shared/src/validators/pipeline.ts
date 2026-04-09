@@ -8,6 +8,7 @@ import {
 
 export const createPipelineSchema = z.object({
   name: z.string().min(1),
+  description: z.string().optional().default(""),
   projectId: z.string().uuid().optional().nullable(),
   status: z.enum(PIPELINE_STATUSES).optional().default("active"),
 });
@@ -28,6 +29,7 @@ export const createPipelineStageSchema = z.object({
   subPipelineId: z.string().uuid().optional().nullable(),
   approverCount: z.number().int().min(1).optional().default(1),
   approverAgentIds: z.array(z.string().uuid()).optional().default([]),
+  timeoutMinutes: z.number().int().min(1).optional().nullable(),
 });
 
 export type CreatePipelineStage = z.infer<typeof createPipelineStageSchema>;

@@ -163,6 +163,31 @@ export function pipelineRoutes(db: Db) {
     res.status(201).json(pipeline);
   });
 
+  router.delete("/projects/:projectId/pipeline", async (req, res) => {
+    const projectId = req.params.projectId as string;
+    const pipeline = await svc.getByProjectId(projectId);
+    if (!pipeline) {
+      res.status(404).json({ error: "No pipeline attached to this project" });
+      return;
+    }
+    assertCompanyAccess(req, pipeline.companyId);
+    await svc.update(pipeline.id, { projectId: null });
+
+    const actor = getActorInfo(req);
+    await logActivity(db, {
+      companyId: pipeline.companyId,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      agentId: actor.agentId,
+      action: "pipeline.detached",
+      entityType: "pipeline",
+      entityId: pipeline.id,
+      details: { projectId },
+    });
+
+    res.json({ ok: true });
+  });
+
   // --- Stage CRUD ---
 
   router.get("/pipelines/:pipelineId/stages", async (req, res) => {

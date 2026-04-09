@@ -3,6 +3,7 @@ export interface Pipeline {
   companyId: string;
   projectId: string | null;
   name: string;
+  description: string;
   status: string;
   createdAt: Date;
   updatedAt: Date;
@@ -20,6 +21,7 @@ export interface PipelineStage {
   subPipelineId: string | null;
   approverCount: number;
   approverAgentIds: string[];
+  timeoutMinutes: number | null;
   createdAt: Date;
   updatedAt: Date;
 }
