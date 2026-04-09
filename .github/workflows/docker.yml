@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "master"
+      - "feature/pipelines"
     tags:
       - "v*"
 
@@ -39,6 +40,7 @@ jobs:
           images: ghcr.io/${{ github.repository }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/feature/pipelines' }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha
