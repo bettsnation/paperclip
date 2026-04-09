@@ -1457,8 +1457,9 @@ export function issueRoutes(
       // Even though assigneeChanged already fires a generic wakeup above, this
       // ensures the new agent is woken with a pipeline-specific reason so the
       // heartbeat correctly picks up the reassigned issue.
-      if (pipelineReassignedAgent && pipelineReassignedAgent.assigneeAgentId) {
-        addWakeup(pipelineReassignedAgent.assigneeAgentId, {
+      const reassigned = pipelineReassignedAgent as { id: string; assigneeAgentId: string; status: string } | null;
+      if (reassigned && reassigned.assigneeAgentId) {
+        addWakeup(reassigned.assigneeAgentId, {
           source: "automation",
           triggerDetail: "system",
           reason: "pipeline_reassignment",

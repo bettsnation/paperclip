@@ -170,7 +170,7 @@ async function evaluatePipelineTransition(
     .where(eq(pipelineStages.pipelineId, run.pipelineId))
     .orderBy(asc(pipelineStages.stageOrder));
 
-  const currentIdx = allStages.findIndex((s) => s.id === currentStage.id);
+  const currentIdx = allStages.findIndex((s: typeof pipelineStages.$inferSelect) => s.id === currentStage.id);
 
   // ---------- COMPLETION ----------
   if (isCompletion) {
