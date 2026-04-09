@@ -207,16 +207,19 @@ async function evaluatePipelineTransition(
   // ---------- COMPLETION ----------
   if (isCompletion) {
     const result = resolveCompletion(existing, run, currentStage, allStages, currentIdx);
-    // Persist merged state on completion
-    result.runPatch.stateJson = mergedStateJson;
-    return { pipelineRunId: run.id, ...result, currentStateJson: mergedStateJson };
+    // Merge caller-supplied pipelineState into the result's stateJson (which includes completedStageIds)
+    // Important: result.runPatch.stateJson has completedStageIds — don't clobber it
+    const resultState = (result.runPatch.stateJson ?? {}) as Record<string, unknown>;
+    result.runPatch.stateJson = { ...resultState, ...pipelineState };
+    return { pipelineRunId: run.id, ...result, currentStateJson: result.runPatch.stateJson as Record<string, unknown> };
   }
 
   // ---------- REJECTION ----------
   const result = resolveRejection(existing, run, currentStage, allStages, currentIdx);
-  // Persist merged state on rejection too
-  result.runPatch.stateJson = mergedStateJson;
-  return { pipelineRunId: run.id, ...result, currentStateJson: mergedStateJson };
+  // Merge caller-supplied pipelineState into the result's stateJson (which has cleared completedStageIds)
+  const resultState = (result.runPatch.stateJson ?? {}) as Record<string, unknown>;
+  result.runPatch.stateJson = { ...resultState, ...pipelineState };
+  return { pipelineRunId: run.id, ...result, currentStateJson: result.runPatch.stateJson as Record<string, unknown> };
 }
 
 /** Group stages by stageOrder and return ordered groups. */
