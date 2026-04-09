@@ -15,6 +15,7 @@ export { budgetService } from "./budgets.js";
 export { secretService } from "./secrets.js";
 export { routineService } from "./routines.js";
 export { pipelineService } from "./pipelines.js";
+export { pipelineTimeoutService } from "./pipeline-timeouts.js";
 export { costService } from "./costs.js";
 export { financeService } from "./finance.js";
 export { heartbeatService } from "./heartbeat.js";
