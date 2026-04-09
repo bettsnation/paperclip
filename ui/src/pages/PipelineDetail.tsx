@@ -44,7 +44,7 @@ import {
 } from "@/components/ui/select";
 import type { PipelineStage } from "@paperclipai/shared";
 
-const STAGE_TYPES = ["action", "review", "approval"] as const;
+const STAGE_TYPES = ["action", "review", "approval", "sub_pipeline"] as const;
 const ON_COMPLETE_OPTIONS = ["next", "done"] as const;
 const ON_REJECT_OPTIONS = ["stop", "previous", "restart"] as const;
 
@@ -52,6 +52,7 @@ const stageTypeColors: Record<string, string> = {
   action: "bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/30",
   review: "bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/30",
   approval: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30",
+  sub_pipeline: "bg-purple-500/10 text-purple-700 dark:text-purple-400 border-purple-500/30",
 };
 
 interface SortableStageProps {
@@ -107,13 +108,23 @@ function SortableStage({ stage, agentName, isLast, onUpdate, onDelete }: Sortabl
             Agent: <span className="text-foreground">{agentName}</span>
           </p>
         )}
-        <div className="flex items-center gap-3 ml-6 text-xs text-muted-foreground">
+        <div className="flex items-center gap-3 ml-6 text-xs text-muted-foreground flex-wrap">
           <span>
             On complete: <span className="text-foreground">{stage.onComplete}</span>
           </span>
           <span>
             On reject: <span className="text-foreground">{stage.onReject}</span>
           </span>
+          {stage.stageType === "sub_pipeline" && stage.subPipelineId && (
+            <span>
+              Sub-pipeline: <span className="text-foreground">{stage.subPipelineId.slice(0, 8)}...</span>
+            </span>
+          )}
+          {stage.stageType === "approval" && stage.approverCount > 1 && (
+            <span>
+              Approvers required: <span className="text-foreground">{stage.approverCount}</span>
+            </span>
+          )}
         </div>
       </div>
       {!isLast && (
@@ -450,7 +461,7 @@ export function PipelineDetail() {
                 <SelectContent>
                   {STAGE_TYPES.map((t) => (
                     <SelectItem key={t} value={t}>
-                      {t.charAt(0).toUpperCase() + t.slice(1)}
+                      {t === "sub_pipeline" ? "Sub-pipeline" : t.charAt(0).toUpperCase() + t.slice(1)}
                     </SelectItem>
                   ))}
                 </SelectContent>

@@ -24,6 +24,7 @@ import {
   pipelines,
   pipelineRuns,
   pipelineStages,
+  approvalDecisions,
   projectWorkspaces,
   projects,
 } from "@paperclipai/db";
@@ -75,9 +76,10 @@ function applyStatusSideEffects(
 
 /** Which issue statuses are valid per pipeline stage type. */
 const STAGE_ALLOWED_STATUSES: Record<string, readonly string[]> = {
-  action:   ["todo", "in_progress", "blocked", "done", "cancelled"],
-  review:   ["in_review", "in_progress", "blocked", "done", "cancelled"],
-  approval: ["in_review", "in_progress", "blocked", "done", "cancelled"],
+  action:       ["todo", "in_progress", "blocked", "done", "cancelled"],
+  review:       ["in_review", "in_progress", "blocked", "done", "cancelled"],
+  approval:     ["in_review", "in_progress", "blocked", "done", "cancelled"],
+  sub_pipeline: ["todo", "in_progress", "blocked", "cancelled"],
 };
 
 /** The status that triggers stage completion for each stage type. */
@@ -92,6 +94,8 @@ function defaultStatusForStageType(stageType: string): string {
     case "review":
     case "approval":
       return "in_review";
+    case "sub_pipeline":
+      return "in_progress";
     default:
       return "todo";
   }
@@ -112,6 +116,14 @@ interface PipelineAction {
     type: string;
     payload: Record<string, unknown>;
     requestedByAgentId?: string | null;
+    approverCount?: number;
+    approverAgentIds?: string[];
+  };
+  /** If set, start a child sub-pipeline run. */
+  createSubPipelineRun?: {
+    pipelineId: string;
+    parentRunId: string;
+    issueId: string;
   };
 }
 
@@ -151,6 +163,13 @@ async function evaluatePipelineTransition(
   if (!allowed.includes(newStatus)) {
     throw conflict(
       `Pipeline stage "${currentStage.name}" (${currentStage.stageType}) does not allow status "${newStatus}"`,
+    );
+  }
+
+  // 3b. Sub-pipeline stages cannot be manually completed — child run auto-advances them
+  if (currentStage.stageType === "sub_pipeline" && newStatus === STAGE_COMPLETE_STATUS) {
+    throw conflict(
+      `Pipeline stage "${currentStage.name}" (sub_pipeline) cannot be completed manually — it advances when the child pipeline completes`,
     );
   }
 
@@ -238,8 +257,19 @@ function buildAdvanceAction(
         pipelineRunId: run.id,
         pipelineStageId: nextStage.id,
         issueId: existing.id,
+        approverCount: nextStage.approverCount ?? 1,
       },
       requestedByAgentId: existing.assigneeAgentId,
+      approverCount: nextStage.approverCount ?? 1,
+      approverAgentIds: (nextStage.approverAgentIds as string[]) ?? [],
+    };
+  }
+
+  if (nextStage.stageType === "sub_pipeline" && nextStage.subPipelineId) {
+    action.createSubPipelineRun = {
+      pipelineId: nextStage.subPipelineId,
+      parentRunId: run.id,
+      issueId: existing.id,
     };
   }
 
@@ -379,6 +409,105 @@ async function applyPipelineAction(
       });
     }
   }
+
+  // Create sub-pipeline run if needed
+  if (action.createSubPipelineRun) {
+    const subStages = await tx
+      .select()
+      .from(pipelineStages)
+      .where(eq(pipelineStages.pipelineId, action.createSubPipelineRun.pipelineId))
+      .orderBy(asc(pipelineStages.stageOrder));
+
+    if (subStages.length > 0) {
+      const firstSubStage = subStages[0];
+      await tx.insert(pipelineRuns).values({
+        pipelineId: action.createSubPipelineRun.pipelineId,
+        issueId: action.createSubPipelineRun.issueId,
+        currentStageId: firstSubStage.id,
+        parentRunId: action.createSubPipelineRun.parentRunId,
+        status: "running",
+      });
+    }
+  }
+
+  // If the pipeline run just completed, check if it has a parent to advance
+  if (action.runPatch.status === "completed") {
+    const [completedRun] = await tx
+      .select()
+      .from(pipelineRuns)
+      .where(eq(pipelineRuns.id, run.id));
+    if (completedRun) {
+      await advanceParentOnChildCompletion(tx, completedRun);
+    }
+  }
+}
+
+/**
+ * When a child pipeline run completes, auto-advance the parent pipeline run's
+ * sub_pipeline stage. This should be called inside the same transaction that
+ * marks the child run as completed.
+ */
+async function advanceParentOnChildCompletion(
+  tx: any,
+  childRun: typeof pipelineRuns.$inferSelect,
+) {
+  if (!childRun.parentRunId) return;
+
+  const parentRun = await tx
+    .select()
+    .from(pipelineRuns)
+    .where(and(eq(pipelineRuns.id, childRun.parentRunId), eq(pipelineRuns.status, "running")))
+    .then((rows: Array<typeof pipelineRuns.$inferSelect>) => rows[0] ?? null);
+
+  if (!parentRun || !parentRun.currentStageId) return;
+
+  const parentStage = await tx
+    .select()
+    .from(pipelineStages)
+    .where(eq(pipelineStages.id, parentRun.currentStageId))
+    .then((rows: Array<typeof pipelineStages.$inferSelect>) => rows[0] ?? null);
+
+  if (!parentStage || parentStage.stageType !== "sub_pipeline") return;
+
+  // The child completed — treat it as if the sub_pipeline stage was completed
+  const parentIssue = parentRun.issueId
+    ? await tx
+        .select()
+        .from(issues)
+        .where(eq(issues.id, parentRun.issueId))
+        .then((rows: Array<typeof issues.$inferSelect>) => rows[0] ?? null)
+    : null;
+
+  if (!parentIssue) return;
+
+  const allStages = await tx
+    .select()
+    .from(pipelineStages)
+    .where(eq(pipelineStages.pipelineId, parentRun.pipelineId))
+    .orderBy(asc(pipelineStages.stageOrder));
+
+  const currentIdx = allStages.findIndex(
+    (s: typeof pipelineStages.$inferSelect) => s.id === parentStage.id,
+  );
+
+  const completionAction = resolveCompletion(parentIssue, parentRun, parentStage, allStages, currentIdx);
+  const pipelineAction: PipelineAction = { pipelineRunId: parentRun.id, ...completionAction };
+
+  // Apply status override to the parent issue
+  if (pipelineAction.overrideStatus) {
+    const issuePatch: Record<string, unknown> = {
+      status: pipelineAction.overrideStatus,
+      updatedAt: new Date(),
+    };
+    if (pipelineAction.overrideStatus === "done") issuePatch.completedAt = new Date();
+    if (pipelineAction.overrideAssigneeAgentId !== undefined) {
+      issuePatch.assigneeAgentId = pipelineAction.overrideAssigneeAgentId;
+      issuePatch.assigneeUserId = null;
+    }
+    await tx.update(issues).set(issuePatch).where(eq(issues.id, parentIssue.id));
+  }
+
+  await applyPipelineAction(tx, parentIssue.id, { id: parentRun.id }, pipelineAction);
 }
 
 // ---------------------------------------------------------------------------

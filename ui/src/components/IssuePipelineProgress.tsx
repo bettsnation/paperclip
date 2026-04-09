@@ -10,6 +10,7 @@ const stageTypeColors: Record<string, string> = {
   action: "border-blue-500/50 text-blue-600 dark:text-blue-400",
   review: "border-amber-500/50 text-amber-600 dark:text-amber-400",
   approval: "border-emerald-500/50 text-emerald-600 dark:text-emerald-400",
+  sub_pipeline: "border-purple-500/50 text-purple-600 dark:text-purple-400",
 };
 
 function StagePill({
@@ -99,7 +100,7 @@ export function IssuePipelineProgress({ issueId, projectId, executionState }: Is
 
   const currentStageId = pipelineRun?.currentStageId ?? executionState?.currentStageId ?? null;
   const currentStage = currentStageId ? sortedStages.find((s) => s.id === currentStageId) : null;
-  const canSkip = pipelineRun && currentStage && currentStage.stageType !== "approval";
+  const canSkip = pipelineRun && currentStage && currentStage.stageType !== "approval" && currentStage.stageType !== "sub_pipeline";
 
   // Group stages by stageOrder for parallel display
   const stageGroups: Array<typeof sortedStages> = [];

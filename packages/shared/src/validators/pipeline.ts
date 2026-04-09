@@ -25,6 +25,9 @@ export const createPipelineStageSchema = z.object({
   stageType: z.enum(PIPELINE_STAGE_TYPES).optional().default("action"),
   onComplete: z.enum(PIPELINE_STAGE_ON_COMPLETE).optional().default("next"),
   onReject: z.enum(PIPELINE_STAGE_ON_REJECT).optional().default("stop"),
+  subPipelineId: z.string().uuid().optional().nullable(),
+  approverCount: z.number().int().min(1).optional().default(1),
+  approverAgentIds: z.array(z.string().uuid()).optional().default([]),
 });
 
 export type CreatePipelineStage = z.infer<typeof createPipelineStageSchema>;
