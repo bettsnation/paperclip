@@ -3,7 +3,8 @@ import { Router, type Request, type Response } from "express";
 import multer from "multer";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
-import { issueExecutionDecisions } from "@paperclipai/db";
+import { issueExecutionDecisions, pipelineRuns, pipelineStages } from "@paperclipai/db";
+import { and, eq } from "drizzle-orm";
 import {
   addIssueCommentSchema,
   createIssueAttachmentMetadataSchema,
@@ -501,7 +502,7 @@ export function issueRoutes(
         ? req.query.wakeCommentId.trim()
         : null;
 
-    const [{ project, goal }, ancestors, commentCursor, wakeComment, relations, attachments] =
+    const [{ project, goal }, ancestors, commentCursor, wakeComment, relations, attachments, pipelineRunRow] =
       await Promise.all([
       resolveIssueProjectAndGoal(issue),
       svc.getAncestors(issue.id),
@@ -509,7 +510,50 @@ export function issueRoutes(
       wakeCommentId ? svc.getComment(wakeCommentId) : null,
       svc.getRelationSummaries(issue.id),
       svc.listAttachments(issue.id),
+      db.select({
+        id: pipelineRuns.id,
+        pipelineId: pipelineRuns.pipelineId,
+        currentStageId: pipelineRuns.currentStageId,
+        status: pipelineRuns.status,
+        stateJson: pipelineRuns.stateJson,
+      })
+        .from(pipelineRuns)
+        .where(and(eq(pipelineRuns.issueId, issue.id), eq(pipelineRuns.status, "running")))
+        .then((rows) => rows[0] ?? null),
     ]);
+
+    // Resolve current stage name/type if there's an active pipeline run
+    let pipelineContext: {
+      pipelineRunId: string;
+      pipelineId: string;
+      currentStageId: string | null;
+      currentStageName: string | null;
+      currentStageType: string | null;
+      stateJson: Record<string, unknown>;
+    } | null = null;
+    if (pipelineRunRow) {
+      let stageName: string | null = null;
+      let stageType: string | null = null;
+      if (pipelineRunRow.currentStageId) {
+        const stage = await db
+          .select({ name: pipelineStages.name, stageType: pipelineStages.stageType })
+          .from(pipelineStages)
+          .where(eq(pipelineStages.id, pipelineRunRow.currentStageId))
+          .then((rows) => rows[0] ?? null);
+        if (stage) {
+          stageName = stage.name;
+          stageType = stage.stageType;
+        }
+      }
+      pipelineContext = {
+        pipelineRunId: pipelineRunRow.id,
+        pipelineId: pipelineRunRow.pipelineId,
+        currentStageId: pipelineRunRow.currentStageId,
+        currentStageName: stageName,
+        currentStageType: stageType,
+        stateJson: (pipelineRunRow.stateJson as Record<string, unknown>) ?? {},
+      };
+    }
 
     res.json({
       issue: {
@@ -565,6 +609,7 @@ export function issueRoutes(
         contentPath: withContentPath(a).contentPath,
         createdAt: a.createdAt,
       })),
+      pipelineContext,
     });
   });
 
@@ -1141,6 +1186,7 @@ export function issueRoutes(
       reopen: reopenRequested,
       interrupt: interruptRequested,
       hiddenAt: hiddenAtRaw,
+      pipelineState,
       ...updateFields
     } = req.body;
     let interruptedRunId: string | null = null;
@@ -1240,6 +1286,7 @@ export function issueRoutes(
               ...updateFields,
               actorAgentId: actor.agentId ?? null,
               actorUserId: actor.actorType === "user" ? actor.actorId : null,
+              ...(pipelineState ? { pipelineState } : {}),
             },
             tx,
             { onPipelineReassignment },
@@ -1266,6 +1313,7 @@ export function issueRoutes(
           ...updateFields,
           actorAgentId: actor.agentId ?? null,
           actorUserId: actor.actorType === "user" ? actor.actorId : null,
+          ...(pipelineState ? { pipelineState } : {}),
         }, undefined, { onPipelineReassignment });
       }
     } catch (err) {
@@ -1459,16 +1507,27 @@ export function issueRoutes(
       // heartbeat correctly picks up the reassigned issue.
       const reassigned = pipelineReassignedAgent as { id: string; assigneeAgentId: string; status: string } | null;
       if (reassigned && reassigned.assigneeAgentId) {
+        // Fetch the latest pipeline run state to include in the wakeup context
+        const activeRun = await db
+          .select({ id: pipelineRuns.id, stateJson: pipelineRuns.stateJson })
+          .from(pipelineRuns)
+          .where(and(eq(pipelineRuns.issueId, issue.id), eq(pipelineRuns.status, "running")))
+          .then((rows) => rows[0] ?? null);
         addWakeup(reassigned.assigneeAgentId, {
           source: "automation",
           triggerDetail: "system",
           reason: "pipeline_reassignment",
-          payload: { issueId: issue.id, mutation: "pipeline_stage_transition" },
+          payload: {
+            issueId: issue.id,
+            mutation: "pipeline_stage_transition",
+            ...(activeRun?.stateJson ? { pipelineState: activeRun.stateJson } : {}),
+          },
           requestedByActorType: actor.actorType,
           requestedByActorId: actor.actorId,
           contextSnapshot: {
             issueId: issue.id,
             source: "pipeline.reassignment",
+            ...(activeRun?.stateJson ? { pipelineState: activeRun.stateJson } : {}),
           },
         });
       }
