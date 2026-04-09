@@ -386,6 +386,13 @@
       "when": 1775850100000,
       "tag": "0054_add_pipelines_project_id",
       "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1775850200000,
+      "tag": "0055_add_sub_pipelines",
+      "breakpoints": true
     }
   ]
 }

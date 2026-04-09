@@ -38,6 +38,7 @@ export const pipelineStages = pgTable(
     stageOrder: integer("stage_order").notNull(),
     agentId: uuid("agent_id").references(() => agents.id, { onDelete: "set null" }),
     stageType: text("stage_type").notNull().default("action"),
+    subPipelineId: uuid("sub_pipeline_id").references(() => pipelines.id, { onDelete: "set null" }),
     onComplete: text("on_complete").notNull().default("next"),
     onReject: text("on_reject").notNull().default("stop"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -55,6 +56,7 @@ export const pipelineRuns = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     pipelineId: uuid("pipeline_id").notNull().references(() => pipelines.id, { onDelete: "cascade" }),
     issueId: uuid("issue_id").references(() => issues.id, { onDelete: "set null" }),
+    parentRunId: uuid("parent_run_id"),
     currentStageId: uuid("current_stage_id").references(() => pipelineStages.id, { onDelete: "set null" }),
     status: text("status").notNull().default("pending"),
     stateJson: jsonb("state_json").$type<Record<string, unknown>>(),
@@ -65,5 +67,6 @@ export const pipelineRuns = pgTable(
     pipelineIdx: index("pipeline_runs_pipeline_idx").on(table.pipelineId),
     issueIdx: index("pipeline_runs_issue_idx").on(table.issueId),
     statusIdx: index("pipeline_runs_status_idx").on(table.pipelineId, table.status),
+    parentRunIdx: index("pipeline_runs_parent_run_idx").on(table.parentRunId),
   }),
 );

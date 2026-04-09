@@ -75,9 +75,10 @@ function applyStatusSideEffects(
 
 /** Which issue statuses are valid per pipeline stage type. */
 const STAGE_ALLOWED_STATUSES: Record<string, readonly string[]> = {
-  action:   ["todo", "in_progress", "blocked", "done", "cancelled"],
-  review:   ["in_review", "in_progress", "blocked", "done", "cancelled"],
-  approval: ["in_review", "in_progress", "blocked", "done", "cancelled"],
+  action:       ["todo", "in_progress", "blocked", "done", "cancelled"],
+  review:       ["in_review", "in_progress", "blocked", "done", "cancelled"],
+  approval:     ["in_review", "in_progress", "blocked", "done", "cancelled"],
+  sub_pipeline: ["todo", "in_progress", "blocked", "cancelled"],
 };
 
 /** The status that triggers stage completion for each stage type. */
@@ -92,6 +93,8 @@ function defaultStatusForStageType(stageType: string): string {
     case "review":
     case "approval":
       return "in_review";
+    case "sub_pipeline":
+      return "in_progress";
     default:
       return "todo";
   }
@@ -112,6 +115,12 @@ interface PipelineAction {
     type: string;
     payload: Record<string, unknown>;
     requestedByAgentId?: string | null;
+  };
+  /** If set, create a child pipeline run for a sub_pipeline stage. */
+  createSubPipelineRun?: {
+    subPipelineId: string;
+    issueId: string;
+    parentRunId: string;
   };
 }
 
@@ -222,6 +231,15 @@ function resolveCompletion(
     };
   }
 
+  // Auto-create child pipeline run when entering a sub_pipeline stage
+  if (nextStage.stageType === "sub_pipeline" && nextStage.subPipelineId) {
+    action.createSubPipelineRun = {
+      subPipelineId: nextStage.subPipelineId,
+      issueId: existing.id,
+      parentRunId: run.id,
+    };
+  }
+
   return action;
 }
 
@@ -284,6 +302,126 @@ async function applyPipelineAction(
       .where(eq(pipelineRuns.id, run.id));
   }
 
+  // When a child pipeline run completes, advance the parent run
+  if (action.runPatch.status === "completed") {
+    const completedRun = await tx
+      .select()
+      .from(pipelineRuns)
+      .where(eq(pipelineRuns.id, run.id))
+      .then((rows: Array<typeof pipelineRuns.$inferSelect>) => rows[0] ?? null);
+
+    if (completedRun?.parentRunId) {
+      const parentRun = await tx
+        .select()
+        .from(pipelineRuns)
+        .where(and(eq(pipelineRuns.id, completedRun.parentRunId), eq(pipelineRuns.status, "running")))
+        .then((rows: Array<typeof pipelineRuns.$inferSelect>) => rows[0] ?? null);
+
+      if (parentRun?.currentStageId) {
+        // Get the parent's current stage and all stages to advance
+        const parentStages = await tx
+          .select()
+          .from(pipelineStages)
+          .where(eq(pipelineStages.pipelineId, parentRun.pipelineId))
+          .orderBy(asc(pipelineStages.stageOrder));
+
+        const parentCurrentIdx = parentStages.findIndex(
+          (s: typeof pipelineStages.$inferSelect) => s.id === parentRun.currentStageId,
+        );
+        const parentCurrentStage = parentStages[parentCurrentIdx];
+
+        if (parentCurrentStage?.stageType === "sub_pipeline") {
+          // Fetch the issue to pass to resolveCompletion
+          const parentIssue = parentRun.issueId
+            ? await tx
+                .select()
+                .from(issues)
+                .where(eq(issues.id, parentRun.issueId))
+                .then((rows: Array<typeof issues.$inferSelect>) => rows[0] ?? null)
+            : null;
+
+          if (parentIssue) {
+            const parentAction = resolveCompletion(
+              parentIssue,
+              parentRun,
+              parentCurrentStage,
+              parentStages,
+              parentCurrentIdx,
+            );
+
+            // Apply the parent advancement
+            if (Object.keys(parentAction.runPatch).length > 0) {
+              await tx
+                .update(pipelineRuns)
+                .set(parentAction.runPatch)
+                .where(eq(pipelineRuns.id, parentRun.id));
+            }
+
+            // Update issue status/assignee for the next parent stage
+            const issuePatch: Partial<typeof issues.$inferInsert> = { updatedAt: new Date() };
+            if (parentAction.overrideStatus) {
+              issuePatch.status = parentAction.overrideStatus;
+            }
+            if (parentAction.overrideAssigneeAgentId !== undefined) {
+              issuePatch.assigneeAgentId = parentAction.overrideAssigneeAgentId;
+              issuePatch.assigneeUserId = null;
+            }
+            await tx
+              .update(issues)
+              .set(issuePatch)
+              .where(eq(issues.id, parentIssue.id));
+
+            // Handle approval creation for next parent stage
+            if (parentAction.createApproval) {
+              const [approval] = await tx
+                .insert(approvals)
+                .values({
+                  companyId: parentAction.createApproval.companyId,
+                  type: parentAction.createApproval.type,
+                  requestedByAgentId: parentAction.createApproval.requestedByAgentId ?? null,
+                  payload: parentAction.createApproval.payload,
+                })
+                .returning();
+              if (approval) {
+                await tx.insert(issueApprovals).values({
+                  companyId: parentAction.createApproval.companyId,
+                  issueId: parentIssue.id,
+                  approvalId: approval.id,
+                });
+              }
+            }
+
+            // Handle nested sub_pipeline creation for next parent stage
+            if (parentAction.createSubPipelineRun) {
+              const { subPipelineId, parentRunId } = parentAction.createSubPipelineRun;
+              const subStages = await tx
+                .select()
+                .from(pipelineStages)
+                .where(eq(pipelineStages.pipelineId, subPipelineId))
+                .orderBy(asc(pipelineStages.stageOrder));
+              if (subStages.length > 0) {
+                const firstSubStage = subStages[0];
+                await tx.insert(pipelineRuns).values({
+                  pipelineId: subPipelineId,
+                  issueId: parentIssue.id,
+                  parentRunId,
+                  currentStageId: firstSubStage.id,
+                  status: "running",
+                });
+                if (firstSubStage.agentId) {
+                  await tx
+                    .update(issues)
+                    .set({ assigneeAgentId: firstSubStage.agentId })
+                    .where(eq(issues.id, parentIssue.id));
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
   // Create approval if needed
   if (action.createApproval) {
     const [approval] = await tx
@@ -303,6 +441,37 @@ async function applyPipelineAction(
         issueId,
         approvalId: approval.id,
       });
+    }
+  }
+
+  // Create child pipeline run for sub_pipeline stages
+  if (action.createSubPipelineRun) {
+    const { subPipelineId, parentRunId } = action.createSubPipelineRun;
+
+    // Fetch the first stage of the sub-pipeline
+    const subStages = await tx
+      .select()
+      .from(pipelineStages)
+      .where(eq(pipelineStages.pipelineId, subPipelineId))
+      .orderBy(asc(pipelineStages.stageOrder));
+
+    if (subStages.length > 0) {
+      const firstSubStage = subStages[0];
+      await tx.insert(pipelineRuns).values({
+        pipelineId: subPipelineId,
+        issueId,
+        parentRunId,
+        currentStageId: firstSubStage.id,
+        status: "running",
+      });
+
+      // Assign the first sub-pipeline stage's agent if set
+      if (firstSubStage.agentId) {
+        await tx
+          .update(issues)
+          .set({ assigneeAgentId: firstSubStage.agentId })
+          .where(eq(issues.id, issueId));
+      }
     }
   }
 }
@@ -1818,18 +1987,48 @@ export function issueService(db: Db) {
 
             if (stages.length > 0) {
               const firstStage = stages[0];
-              await tx.insert(pipelineRuns).values({
+              const [newRun] = await tx.insert(pipelineRuns).values({
                 pipelineId: pipeline.id,
                 issueId: issue.id,
                 currentStageId: firstStage.id,
                 status: "running",
-              });
+              }).returning();
 
               // Assign the first stage's agent if set and issue has no assignee yet
               if (firstStage.agentId && !issue.assigneeAgentId) {
                 await tx
                   .update(issues)
                   .set({ assigneeAgentId: firstStage.agentId })
+                  .where(eq(issues.id, issue.id));
+              }
+
+              // If first stage is sub_pipeline, create child pipeline run
+              if (firstStage.stageType === "sub_pipeline" && firstStage.subPipelineId && newRun) {
+                const subStages = await tx
+                  .select()
+                  .from(pipelineStages)
+                  .where(eq(pipelineStages.pipelineId, firstStage.subPipelineId))
+                  .orderBy(asc(pipelineStages.stageOrder));
+                if (subStages.length > 0) {
+                  const firstSubStage = subStages[0];
+                  await tx.insert(pipelineRuns).values({
+                    pipelineId: firstStage.subPipelineId,
+                    issueId: issue.id,
+                    parentRunId: newRun.id,
+                    currentStageId: firstSubStage.id,
+                    status: "running",
+                  });
+                  if (firstSubStage.agentId) {
+                    await tx
+                      .update(issues)
+                      .set({ assigneeAgentId: firstSubStage.agentId })
+                      .where(eq(issues.id, issue.id));
+                  }
+                }
+                // Set issue to in_progress for sub_pipeline stage
+                await tx
+                  .update(issues)
+                  .set({ status: "in_progress" })
                   .where(eq(issues.id, issue.id));
               }
             }

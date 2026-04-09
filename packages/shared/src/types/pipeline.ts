@@ -15,6 +15,7 @@ export interface PipelineStage {
   stageOrder: number;
   agentId: string | null;
   stageType: string;
+  subPipelineId: string | null;
   onComplete: string;
   onReject: string;
   createdAt: Date;
@@ -25,6 +26,7 @@ export interface PipelineRun {
   id: string;
   pipelineId: string;
   issueId: string | null;
+  parentRunId: string | null;
   currentStageId: string | null;
   status: string;
   stateJson: Record<string, unknown> | null;
