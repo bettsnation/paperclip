@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { approvalComments, approvals } from "@paperclipai/db";
+import { approvalComments, approvals, approvalDecisions } from "@paperclipai/db";
 import { notFound, unprocessable } from "../errors.js";
 import { redactCurrentUserText } from "../log-redaction.js";
 import { agentService } from "./agents.js";
@@ -78,7 +78,74 @@ export function approvalService(db: Db) {
     );
   }
 
+  function isMultiApprover(approval: ApprovalRecord): boolean {
+    if (approval.type !== "pipeline_stage_approval") return false;
+    const payload = approval.payload as Record<string, unknown>;
+    const count = typeof payload.approverCount === "number" ? payload.approverCount : 1;
+    return count > 1;
+  }
+
+  function getRequiredApproverCount(approval: ApprovalRecord): number {
+    const payload = approval.payload as Record<string, unknown>;
+    return typeof payload.approverCount === "number" ? payload.approverCount : 1;
+  }
+
+  async function recordDecision(
+    approvalId: string,
+    decidedByUserId: string,
+    decision: "approved" | "rejected",
+    decisionNote: string | null,
+  ) {
+    // Check for existing decision by same user (idempotent)
+    const existing = await db
+      .select()
+      .from(approvalDecisions)
+      .where(
+        and(
+          eq(approvalDecisions.approvalId, approvalId),
+          eq(approvalDecisions.decidedByUserId, decidedByUserId),
+        ),
+      )
+      .then((rows) => rows[0] ?? null);
+
+    if (existing) {
+      return { decision: existing, alreadyRecorded: true };
+    }
+
+    const [recorded] = await db
+      .insert(approvalDecisions)
+      .values({
+        approvalId,
+        decidedByUserId,
+        decision,
+        decisionNote,
+      })
+      .returning();
+
+    return { decision: recorded, alreadyRecorded: false };
+  }
+
+  async function countApprovedDecisions(approvalId: string): Promise<number> {
+    const decisions = await db
+      .select()
+      .from(approvalDecisions)
+      .where(
+        and(
+          eq(approvalDecisions.approvalId, approvalId),
+          eq(approvalDecisions.decision, "approved"),
+        ),
+      );
+    return decisions.length;
+  }
+
   return {
+    listDecisions: (approvalId: string) =>
+      db
+        .select()
+        .from(approvalDecisions)
+        .where(eq(approvalDecisions.approvalId, approvalId))
+        .orderBy(asc(approvalDecisions.decidedAt)),
+
     list: (companyId: string, status?: string) => {
       const conditions = [eq(approvals.companyId, companyId)];
       if (status) conditions.push(eq(approvals.status, status));
@@ -100,6 +167,21 @@ export function approvalService(db: Db) {
         .then((rows) => rows[0]),
 
     approve: async (id: string, decidedByUserId: string, decisionNote?: string | null) => {
+      const existing = await getExistingApproval(id);
+
+      // Multi-approver path for pipeline stage approvals
+      if (isMultiApprover(existing) && canResolveStatuses.has(existing.status)) {
+        const { alreadyRecorded } = await recordDecision(id, decidedByUserId, "approved", decisionNote ?? null);
+        const approvedCount = await countApprovedDecisions(id);
+        const requiredCount = getRequiredApproverCount(existing);
+
+        if (approvedCount < requiredCount) {
+          // Threshold not met — stay pending, no side-effects
+          return { approval: existing, applied: false };
+        }
+        // Threshold met — fall through to resolve the approval
+      }
+
       const { approval: updated, applied } = await resolveApproval(
         id,
         "approved",
@@ -169,6 +251,13 @@ export function approvalService(db: Db) {
     },
 
     reject: async (id: string, decidedByUserId: string, decisionNote?: string | null) => {
+      // Record individual decision for multi-approver tracking
+      const existing = await getExistingApproval(id);
+      if (isMultiApprover(existing) && canResolveStatuses.has(existing.status)) {
+        await recordDecision(id, decidedByUserId, "rejected", decisionNote ?? null);
+      }
+
+      // Any single rejection immediately resolves the approval
       const { approval: updated, applied } = await resolveApproval(
         id,
         "rejected",

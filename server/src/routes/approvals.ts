@@ -148,6 +148,18 @@ export function approvalRoutes(db: Db) {
     res.status(201).json(redactApprovalPayload(approval));
   });
 
+  router.get("/approvals/:id/decisions", async (req, res) => {
+    const id = req.params.id as string;
+    const approval = await svc.getById(id);
+    if (!approval) {
+      res.status(404).json({ error: "Approval not found" });
+      return;
+    }
+    assertCompanyAccess(req, approval.companyId);
+    const decisions = await svc.listDecisions(id);
+    res.json(decisions);
+  });
+
   router.get("/approvals/:id/issues", async (req, res) => {
     const id = req.params.id as string;
     const approval = await svc.getById(id);

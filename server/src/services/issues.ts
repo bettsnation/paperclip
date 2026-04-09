@@ -217,6 +217,8 @@ function resolveCompletion(
         pipelineRunId: run.id,
         pipelineStageId: nextStage.id,
         issueId: existing.id,
+        approverCount: nextStage.approverCount ?? 1,
+        approverAgentIds: nextStage.approverAgentIds ?? null,
       },
       requestedByAgentId: existing.assigneeAgentId,
     };

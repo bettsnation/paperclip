@@ -349,6 +349,7 @@ export type {
   Pipeline,
   PipelineStage,
   PipelineRun,
+  ApprovalDecision,
   JsonSchema,
   PluginJobDeclaration,
   PluginWebhookDeclaration,

@@ -8,6 +8,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import { agents } from "./agents.js";
+import { approvals } from "./approvals.js";
 import { companies } from "./companies.js";
 import { issues } from "./issues.js";
 import { projects } from "./projects.js";
@@ -38,6 +39,8 @@ export const pipelineStages = pgTable(
     stageOrder: integer("stage_order").notNull(),
     agentId: uuid("agent_id").references(() => agents.id, { onDelete: "set null" }),
     stageType: text("stage_type").notNull().default("action"),
+    approverCount: integer("approver_count").notNull().default(1),
+    approverAgentIds: jsonb("approver_agent_ids").$type<string[]>(),
     onComplete: text("on_complete").notNull().default("next"),
     onReject: text("on_reject").notNull().default("stop"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -65,5 +68,22 @@ export const pipelineRuns = pgTable(
     pipelineIdx: index("pipeline_runs_pipeline_idx").on(table.pipelineId),
     issueIdx: index("pipeline_runs_issue_idx").on(table.issueId),
     statusIdx: index("pipeline_runs_status_idx").on(table.pipelineId, table.status),
+  }),
+);
+
+export const approvalDecisions = pgTable(
+  "approval_decisions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    approvalId: uuid("approval_id").notNull().references(() => approvals.id, { onDelete: "cascade" }),
+    decidedByUserId: text("decided_by_user_id"),
+    decidedByAgentId: uuid("decided_by_agent_id").references(() => agents.id, { onDelete: "set null" }),
+    decision: text("decision").notNull(), // "approved" | "rejected"
+    decisionNote: text("decision_note"),
+    decidedAt: timestamp("decided_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    approvalIdx: index("approval_decisions_approval_idx").on(table.approvalId),
+    approvalUserIdx: index("approval_decisions_approval_user_idx").on(table.approvalId, table.decidedByUserId),
   }),
 );

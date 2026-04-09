@@ -23,6 +23,8 @@ export const createPipelineStageSchema = z.object({
   stageOrder: z.number().int().min(0),
   agentId: z.string().uuid().optional().nullable(),
   stageType: z.enum(PIPELINE_STAGE_TYPES).optional().default("action"),
+  approverCount: z.number().int().min(1).optional().default(1),
+  approverAgentIds: z.array(z.string().uuid()).optional().nullable(),
   onComplete: z.enum(PIPELINE_STAGE_ON_COMPLETE).optional().default("next"),
   onReject: z.enum(PIPELINE_STAGE_ON_REJECT).optional().default("stop"),
 });

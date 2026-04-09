@@ -15,10 +15,22 @@ export interface PipelineStage {
   stageOrder: number;
   agentId: string | null;
   stageType: string;
+  approverCount: number;
+  approverAgentIds: string[] | null;
   onComplete: string;
   onReject: string;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface ApprovalDecision {
+  id: string;
+  approvalId: string;
+  decidedByUserId: string | null;
+  decidedByAgentId: string | null;
+  decision: string;
+  decisionNote: string | null;
+  decidedAt: Date;
 }
 
 export interface PipelineRun {
