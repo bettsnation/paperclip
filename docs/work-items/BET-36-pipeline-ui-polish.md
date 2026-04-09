@@ -4,7 +4,7 @@ source_type: feature
 components: [pipelines, sidebar, project-config, approvals, inbox]
 tags: [ui-polish, pipeline-editing, beta-badge]
 files_changed:
-  - packages/db/src/migrations/0056_pipeline_description_timeout.sql
+  - packages/db/src/migrations/0057_pipeline_description_timeout.sql
   - packages/db/src/schema/pipelines.ts
   - packages/shared/src/types/pipeline.ts
   - packages/shared/src/validators/pipeline.ts
@@ -48,7 +48,7 @@ Comprehensive UI polish across 10 areas to bring pipelines to parity with Routin
 ### 6. Pipeline Detail: Expanded Properties Panel
 - `ui/src/pages/PipelineDetail.tsx` — added description field, linked project, stage count summary
 - `packages/db/src/schema/pipelines.ts` — added `description` column to pipelines table
-- `packages/db/src/migrations/0056_pipeline_description_timeout.sql` — adds `description` column
+- `packages/db/src/migrations/0057_pipeline_description_timeout.sql` — adds `description` column
 - `packages/shared/src/types/pipeline.ts` — added `description` to Pipeline type
 - `packages/shared/src/validators/pipeline.ts` — added `description` to validators
 
