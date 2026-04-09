@@ -23,8 +23,9 @@ import { Bot, CircleDot, DollarSign, ShieldCheck, LayoutDashboard, PauseCircle }
 import { ActiveAgentsPanel } from "../components/ActiveAgentsPanel";
 import { ChartCard, RunActivityChart, PriorityChart, IssueStatusChart, SuccessRateChart } from "../components/ActivityCharts";
 import { PageSkeleton } from "../components/PageSkeleton";
-import type { Agent, Issue } from "@paperclipai/shared";
+import type { Agent, Issue, IssueExecutionState } from "@paperclipai/shared";
 import { PluginSlotOutlet } from "@/plugins/slots";
+import { PipelineStageBadge } from "../components/PipelineStageBadge";
 
 function getRecentIssues(issues: Issue[]): Issue[] {
   return [...issues]
@@ -298,6 +299,42 @@ export function Dashboard() {
             </ChartCard>
           </div>
 
+          {(() => {
+            const stageBreakdown = (issues ?? []).reduce<Record<string, number>>((acc, issue) => {
+              const stageType = issue.executionState?.currentStageType;
+              if (stageType) acc[stageType] = (acc[stageType] ?? 0) + 1;
+              return acc;
+            }, {});
+            const stageTypeLabels: Record<string, { label: string; color: string }> = {
+              action: { label: "Action", color: "bg-blue-500" },
+              review: { label: "Review", color: "bg-amber-500" },
+              approval: { label: "Approval", color: "bg-emerald-500" },
+            };
+            const entries = Object.entries(stageBreakdown);
+            if (entries.length === 0) return null;
+            const total = entries.reduce((sum, [, count]) => sum + count, 0);
+            return (
+              <div className="rounded-lg border border-border bg-card p-4 shadow-sm">
+                <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+                  Pipeline Stages
+                </h3>
+                <div className="flex items-center gap-4">
+                  {entries.map(([type, count]) => {
+                    const meta = stageTypeLabels[type] ?? { label: type, color: "bg-muted" };
+                    return (
+                      <div key={type} className="flex items-center gap-2">
+                        <span className={`h-2.5 w-2.5 rounded-full ${meta.color}`} />
+                        <span className="text-sm">{meta.label}</span>
+                        <span className="text-sm font-semibold">{count}</span>
+                      </div>
+                    );
+                  })}
+                  <span className="text-xs text-muted-foreground ml-auto">{total} issue{total !== 1 ? "s" : ""} in pipeline</span>
+                </div>
+              </div>
+            );
+          })()}
+
           <PluginSlotOutlet
             slotTypes={["dashboardWidget"]}
             context={{ companyId: selectedCompanyId }}
@@ -360,6 +397,12 @@ export function Dashboard() {
                             <span className="text-xs font-mono text-muted-foreground">
                               {issue.identifier ?? issue.id.slice(0, 8)}
                             </span>
+                            {issue.executionState?.currentStageId && (
+                              <PipelineStageBadge
+                                projectId={issue.projectId}
+                                executionState={issue.executionState}
+                              />
+                            )}
                             {issue.assigneeAgentId && (() => {
                               const name = agentName(issue.assigneeAgentId);
                               return name

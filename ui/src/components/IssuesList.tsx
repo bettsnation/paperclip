@@ -15,6 +15,7 @@ import { PriorityIcon } from "./PriorityIcon";
 import { EmptyState } from "./EmptyState";
 import { Identity } from "./Identity";
 import { IssueRow } from "./IssueRow";
+import { PipelineStageBadge } from "./PipelineStageBadge";
 import { PageSkeleton } from "./PageSkeleton";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -753,6 +754,12 @@ export function IssuesList({
                         mobileMeta={timeAgo(issue.updatedAt)}
                         desktopTrailing={(
                           <>
+                            {issue.executionState?.currentStageId && (
+                              <PipelineStageBadge
+                                projectId={issue.projectId}
+                                executionState={issue.executionState}
+                              />
+                            )}
                             {(issue.labels ?? []).length > 0 && (
                               <span className="hidden items-center gap-1 overflow-hidden md:flex md:max-w-[240px]">
                                 {(issue.labels ?? []).slice(0, 3).map((label) => (
