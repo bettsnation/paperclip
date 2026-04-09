@@ -234,7 +234,6 @@ function BoardApprovalPayloadContent({ payload }: { payload: Record<string, unkn
 export function PipelineStageApprovalPayload({ payload }: { payload: Record<string, unknown> }) {
   const title = firstNonEmptyString(payload.title);
   const summary = firstNonEmptyString(payload.summary);
-  const approverCount = typeof payload.approverCount === "number" ? payload.approverCount : null;
 
   return (
     <div className="mt-3 space-y-2 text-sm">
@@ -246,11 +245,6 @@ export function PipelineStageApprovalPayload({ payload }: { payload: Record<stri
       )}
       {summary && (
         <p className="leading-6 text-muted-foreground">{summary}</p>
-      )}
-      {approverCount !== null && approverCount > 1 && (
-        <p className="text-xs text-muted-foreground">
-          Requires <span className="font-medium text-foreground">{approverCount}</span> approver{approverCount > 1 ? "s" : ""}
-        </p>
       )}
     </div>
   );

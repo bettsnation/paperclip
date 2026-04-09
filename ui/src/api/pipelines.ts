@@ -1,4 +1,4 @@
-import type { ApprovalDecision, Pipeline, PipelineRun, PipelineStage } from "@paperclipai/shared";
+import type { Pipeline, PipelineRun, PipelineStage } from "@paperclipai/shared";
 import { api } from "./client";
 
 export const pipelinesApi = {
@@ -26,6 +26,8 @@ export const pipelinesApi = {
     api.get<Pipeline>(`/projects/${projectId}/pipeline`),
   attachProjectPipeline: (projectId: string, data: Record<string, unknown>) =>
     api.post<Pipeline>(`/projects/${projectId}/pipeline`, data),
+  attachExistingPipeline: (projectId: string, pipelineId: string) =>
+    api.put<Pipeline>(`/projects/${projectId}/pipeline`, { pipelineId }),
   detachProjectPipeline: (projectId: string) =>
     api.delete<void>(`/projects/${projectId}/pipeline`),
 
@@ -34,10 +36,4 @@ export const pipelinesApi = {
     api.get<PipelineRun>(`/issues/${issueId}/pipeline-run`),
   skipStage: (runId: string, reason: string) =>
     api.post<PipelineRun>(`/pipeline-runs/${runId}/skip-stage`, { reason }),
-
-  // Approval decisions (multi-approver)
-  listApprovalDecisions: (approvalId: string) =>
-    api.get<ApprovalDecision[]>(`/approvals/${approvalId}/decisions`),
-  submitApprovalDecision: (approvalId: string, decision: string, comment?: string) =>
-    api.post(`/approvals/${approvalId}/decisions`, { decision, comment }),
 };

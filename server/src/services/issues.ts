@@ -24,7 +24,6 @@ import {
   pipelines,
   pipelineRuns,
   pipelineStages,
-  approvalDecisions,
   projectWorkspaces,
   projects,
 } from "@paperclipai/db";
@@ -116,14 +115,15 @@ interface PipelineAction {
     type: string;
     payload: Record<string, unknown>;
     requestedByAgentId?: string | null;
-    approverCount?: number;
-    approverAgentIds?: string[];
   };
-  /** If set, start a child sub-pipeline run. */
+  /** If set, create a child issue with its own sub-pipeline run. */
   createSubPipelineRun?: {
     pipelineId: string;
     parentRunId: string;
     issueId: string;
+    companyId: string;
+    projectId: string | null;
+    stageName: string;
   };
   /** Current stateJson from the pipeline run (for heartbeat context). */
   currentStateJson?: Record<string, unknown> | null;
@@ -278,11 +278,8 @@ function buildAdvanceAction(
         pipelineRunId: run.id,
         pipelineStageId: nextStage.id,
         issueId: existing.id,
-        approverCount: nextStage.approverCount ?? 1,
       },
       requestedByAgentId: existing.assigneeAgentId,
-      approverCount: nextStage.approverCount ?? 1,
-      approverAgentIds: (nextStage.approverAgentIds as string[]) ?? [],
     };
   }
 
@@ -291,6 +288,9 @@ function buildAdvanceAction(
       pipelineId: nextStage.subPipelineId,
       parentRunId: run.id,
       issueId: existing.id,
+      companyId: existing.companyId,
+      projectId: existing.projectId,
+      stageName: nextStage.name,
     };
   }
 
@@ -431,7 +431,7 @@ async function applyPipelineAction(
     }
   }
 
-  // Create sub-pipeline run if needed
+  // Create child issue with sub-pipeline run if needed
   if (action.createSubPipelineRun) {
     const subStages = await tx
       .select()
@@ -441,12 +441,54 @@ async function applyPipelineAction(
 
     if (subStages.length > 0) {
       const firstSubStage = subStages[0];
+      const { companyId, projectId, stageName, parentRunId } = action.createSubPipelineRun;
+
+      // Allocate issue number
+      const [maxRow] = await tx
+        .select({ maxNum: sql<number>`coalesce(max(${issues.issueNumber}), 0)` })
+        .from(issues)
+        .where(eq(issues.companyId, companyId));
+      const [company] = await tx
+        .update(companies)
+        .set({ issueCounter: sql`greatest(${companies.issueCounter}, ${maxRow?.maxNum ?? 0}) + 1` })
+        .where(eq(companies.id, companyId))
+        .returning({ issueCounter: companies.issueCounter, issuePrefix: companies.issuePrefix });
+
+      const issueNumber = company.issueCounter;
+      const identifier = `${company.issuePrefix}-${issueNumber}`;
+
+      // Create child issue
+      const [childIssue] = await tx
+        .insert(issues)
+        .values({
+          companyId,
+          projectId,
+          parentId: issueId,
+          title: `Sub-pipeline: ${stageName}`,
+          status: "in_progress",
+          startedAt: new Date(),
+          issueNumber,
+          identifier,
+          originKind: "sub_pipeline",
+        })
+        .returning();
+
+      // Assign the first sub-pipeline stage's agent if set
+      if (firstSubStage.agentId) {
+        await tx
+          .update(issues)
+          .set({ assigneeAgentId: firstSubStage.agentId })
+          .where(eq(issues.id, childIssue.id));
+      }
+
+      // Start pipeline run on the child issue
       await tx.insert(pipelineRuns).values({
         pipelineId: action.createSubPipelineRun.pipelineId,
-        issueId: action.createSubPipelineRun.issueId,
+        issueId: childIssue.id,
         currentStageId: firstSubStage.id,
-        parentRunId: action.createSubPipelineRun.parentRunId,
+        parentRunId,
         status: "running",
+        stageEnteredAt: new Date(),
       });
     }
   }

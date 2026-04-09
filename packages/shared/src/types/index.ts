@@ -207,7 +207,6 @@ export type {
   Pipeline,
   PipelineStage,
   PipelineRun,
-  ApprovalDecision,
 } from "./pipeline.js";
 export type {
   JsonSchema,

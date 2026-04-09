@@ -60,14 +60,16 @@ const stageTypeColors: Record<string, string> = {
 
 interface SortableStageProps {
   stage: PipelineStage;
+  displayIndex: number;
   agentName: string | null;
   isLast: boolean;
+  isEditing: boolean;
   onUpdate: (data: Record<string, unknown>) => void;
   onDelete: () => void;
   onEdit: () => void;
 }
 
-function SortableStage({ stage, agentName, isLast, onUpdate, onDelete, onEdit }: SortableStageProps) {
+function SortableStage({ stage, displayIndex, agentName, isLast, isEditing, onUpdate, onDelete, onEdit }: SortableStageProps) {
   const {
     attributes,
     listeners,
@@ -91,24 +93,30 @@ function SortableStage({ stage, agentName, isLast, onUpdate, onDelete, onEdit }:
         className="flex-1 border border-border rounded-md bg-card p-3 space-y-2"
       >
         <div className="flex items-center gap-2">
-          <button
-            {...attributes}
-            {...listeners}
-            className="cursor-grab text-muted-foreground hover:text-foreground"
-          >
-            <GripVertical className="h-4 w-4" />
-          </button>
-          <span className="text-xs font-mono text-muted-foreground">#{stage.stageOrder + 1}</span>
+          {isEditing && (
+            <button
+              {...attributes}
+              {...listeners}
+              className="cursor-grab text-muted-foreground hover:text-foreground"
+            >
+              <GripVertical className="h-4 w-4" />
+            </button>
+          )}
+          <span className="text-xs font-mono text-muted-foreground">#{displayIndex}</span>
           <span className={`text-xs font-medium px-1.5 py-0.5 rounded border ${stageTypeColors[stage.stageType] ?? stageTypeColors.action}`}>
             {stage.stageType}
           </span>
           <span className="flex-1 text-sm font-medium truncate">{stage.name}</span>
-          <Button variant="ghost" size="icon-xs" onClick={onEdit}>
-            <Pencil className="h-3.5 w-3.5 text-muted-foreground hover:text-foreground" />
-          </Button>
-          <Button variant="ghost" size="icon-xs" onClick={onDelete}>
-            <Trash2 className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" />
-          </Button>
+          {isEditing && (
+            <>
+              <Button variant="ghost" size="icon-xs" onClick={onEdit}>
+                <Pencil className="h-3.5 w-3.5 text-muted-foreground hover:text-foreground" />
+              </Button>
+              <Button variant="ghost" size="icon-xs" onClick={onDelete}>
+                <Trash2 className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" />
+              </Button>
+            </>
+          )}
         </div>
         {agentName && (
           <p className="text-xs text-muted-foreground ml-6">
@@ -131,11 +139,6 @@ function SortableStage({ stage, agentName, isLast, onUpdate, onDelete, onEdit }:
           {stage.stageType === "sub_pipeline" && stage.subPipelineId && (
             <span>
               Sub-pipeline: <span className="text-foreground">{stage.subPipelineId.slice(0, 8)}...</span>
-            </span>
-          )}
-          {stage.stageType === "approval" && stage.approverCount > 1 && (
-            <span>
-              Approvers required: <span className="text-foreground">{stage.approverCount}</span>
             </span>
           )}
         </div>
@@ -170,7 +173,6 @@ function EditStageDialog({
   const [onComplete, setOnComplete] = useState(stage.onComplete);
   const [onReject, setOnReject] = useState(stage.onReject);
   const [timeoutMinutes, setTimeoutMinutes] = useState<string>(stage.timeoutMinutes?.toString() ?? "");
-  const [approverCount, setApproverCount] = useState<string>(stage.approverCount?.toString() ?? "1");
   const [subPipelineId, setSubPipelineId] = useState<string>(stage.subPipelineId ?? "__none__");
 
   useEffect(() => {
@@ -181,7 +183,6 @@ function EditStageDialog({
       setOnComplete(stage.onComplete);
       setOnReject(stage.onReject);
       setTimeoutMinutes(stage.timeoutMinutes?.toString() ?? "");
-      setApproverCount(stage.approverCount?.toString() ?? "1");
       setSubPipelineId(stage.subPipelineId ?? "__none__");
     }
   }, [open, stage]);
@@ -197,9 +198,6 @@ function EditStageDialog({
       onReject,
       timeoutMinutes: timeoutMinutes ? parseInt(timeoutMinutes, 10) : null,
     };
-    if (stageType === "approval") {
-      data.approverCount = parseInt(approverCount, 10) || 1;
-    }
     if (stageType === "sub_pipeline") {
       data.subPipelineId = subPipelineId === "__none__" ? null : subPipelineId;
     }
@@ -297,19 +295,6 @@ function EditStageDialog({
             />
           </div>
 
-          {stageType === "approval" && (
-            <div>
-              <label className="text-sm font-medium">Approvers Required</label>
-              <input
-                type="number"
-                min="1"
-                value={approverCount}
-                onChange={(e) => setApproverCount(e.target.value)}
-                className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
-              />
-            </div>
-          )}
-
           {stageType === "sub_pipeline" && (
             <div>
               <label className="text-sm font-medium">Sub-pipeline</label>
@@ -343,15 +328,22 @@ function EditStageDialog({
 
 function PipelineProperties({
   pipeline,
-  stageCount,
+  stages,
   projectName,
+  projectUrlKey,
   onUpdate,
 }: {
   pipeline: { id: string; description?: string; status: string; projectId?: string | null; createdAt: Date | string; updatedAt: Date | string };
-  stageCount: number;
+  stages: PipelineStage[];
   projectName: string | null;
+  projectUrlKey: string | null;
   onUpdate: (data: Record<string, unknown>) => void;
 }) {
+  const stageCount = stages.length;
+  const typeCounts = stages.reduce<Record<string, number>>((acc, s) => {
+    acc[s.stageType] = (acc[s.stageType] ?? 0) + 1;
+    return acc;
+  }, {});
   return (
     <div className="space-y-4 text-sm">
       <h3 className="font-semibold text-xs uppercase text-muted-foreground tracking-wider">Properties</h3>
@@ -387,12 +379,30 @@ function PipelineProperties({
         {projectName && (
           <div>
             <label className="text-xs text-muted-foreground">Project</label>
-            <p className="text-xs mt-0.5 font-medium">{projectName}</p>
+            {projectUrlKey ? (
+              <a href={`/projects/${projectUrlKey}`} className="text-xs mt-0.5 font-medium text-primary hover:underline block">
+                {projectName}
+              </a>
+            ) : (
+              <p className="text-xs mt-0.5 font-medium">{projectName}</p>
+            )}
           </div>
         )}
         <div>
           <label className="text-xs text-muted-foreground">Stages</label>
-          <p className="text-xs mt-0.5">{stageCount} stage{stageCount !== 1 ? "s" : ""}</p>
+          <p className="text-xs mt-0.5">
+            {stageCount} stage{stageCount !== 1 ? "s" : ""}
+            {stageCount > 0 && (
+              <span className="text-muted-foreground">
+                {": "}
+                {Object.entries(typeCounts).map(([type, count], i) => (
+                  <span key={type}>
+                    {i > 0 ? ", " : ""}{count} {type}
+                  </span>
+                ))}
+              </span>
+            )}
+          </p>
         </div>
         <div>
           <label className="text-xs text-muted-foreground">Created</label>
@@ -417,6 +427,8 @@ export function PipelineDetail() {
 
   const [showAddStage, setShowAddStage] = useState(false);
   const [editingStage, setEditingStage] = useState<PipelineStage | null>(null);
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [deletingStage, setDeletingStage] = useState<PipelineStage | null>(null);
   const [newStageName, setNewStageName] = useState("");
   const [newStageType, setNewStageType] = useState<string>("action");
   const [newStageAgentId, setNewStageAgentId] = useState<string>("__none__");
@@ -459,9 +471,11 @@ export function PipelineDetail() {
     enabled: !!resolvedCompanyId,
   });
 
-  const projectName = pipeline?.projectId
-    ? (projects ?? []).find((p) => p.id === pipeline.projectId)?.name ?? null
+  const matchedProject = pipeline?.projectId
+    ? (projects ?? []).find((p) => p.id === pipeline.projectId) ?? null
     : null;
+  const projectName = matchedProject?.name ?? null;
+  const projectUrlKey = matchedProject?.urlKey ?? matchedProject?.id ?? null;
 
   const agentMap = new Map((agents ?? []).map((a) => [a.id, a.name]));
 
@@ -493,14 +507,15 @@ export function PipelineDetail() {
       openPanel(
         <PipelineProperties
           pipeline={pipeline}
-          stageCount={stages?.length ?? 0}
+          stages={stages ?? []}
           projectName={projectName}
+          projectUrlKey={projectUrlKey}
           onUpdate={(data) => updatePipeline.mutate(data)}
         />,
       );
     }
     return () => closePanel();
-  }, [pipeline, stages?.length, projectName]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pipeline, stages, projectName, projectUrlKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const createStage = useMutation({
     mutationFn: (data: Record<string, unknown>) =>
@@ -593,10 +608,22 @@ export function PipelineDetail() {
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-semibold">Stages ({sortedStages.length})</h3>
-          <Button size="sm" variant="outline" onClick={() => setShowAddStage(true)}>
-            <Plus className="h-3.5 w-3.5 mr-1.5" />
-            Add Stage
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant={isEditMode ? "default" : "outline"}
+              onClick={() => setIsEditMode(!isEditMode)}
+            >
+              <Pencil className="h-3.5 w-3.5 mr-1.5" />
+              {isEditMode ? "Done Editing" : "Edit Pipeline"}
+            </Button>
+            {isEditMode && (
+              <Button size="sm" variant="outline" onClick={() => setShowAddStage(true)}>
+                <Plus className="h-3.5 w-3.5 mr-1.5" />
+                Add Stage
+              </Button>
+            )}
+          </div>
         </div>
 
         {sortedStages.length === 0 ? (
@@ -607,32 +634,36 @@ export function PipelineDetail() {
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
             <SortableContext items={sortedStages.map((s) => s.id)} strategy={verticalListSortingStrategy}>
               <div className="space-y-1">
-                {orderedGroups.map(([order, group], gi) => (
+                {orderedGroups.map(([_order, group], gi) => (
                   group.length === 1 ? (
                     <SortableStage
                       key={group[0].id}
                       stage={group[0]}
+                      displayIndex={gi + 1}
                       agentName={group[0].agentId ? (agentMap.get(group[0].agentId) ?? group[0].agentId.slice(0, 8)) : null}
                       isLast={gi === orderedGroups.length - 1}
+                      isEditing={isEditMode}
                       onUpdate={(data) => updateStage.mutate({ stageId: group[0].id, data })}
-                      onDelete={() => deleteStage.mutate(group[0].id)}
+                      onDelete={() => setDeletingStage(group[0])}
                       onEdit={() => setEditingStage(group[0])}
                     />
                   ) : (
-                    <div key={`group-${order}`} className="flex items-stretch gap-0">
+                    <div key={`group-${gi}`} className="flex items-stretch gap-0">
                       <div className="flex-1 border border-dashed border-muted-foreground/40 rounded-md bg-accent/20 p-2 space-y-1">
                         <div className="flex items-center gap-1.5 mb-1">
                           <Layers className="h-3.5 w-3.5 text-muted-foreground" />
-                          <span className="text-xs font-medium text-muted-foreground">Parallel Group (order #{order + 1})</span>
+                          <span className="text-xs font-medium text-muted-foreground">Parallel Group (step #{gi + 1})</span>
                         </div>
                         {group.map((stage) => (
                           <SortableStage
                             key={stage.id}
                             stage={stage}
+                            displayIndex={gi + 1}
                             agentName={stage.agentId ? (agentMap.get(stage.agentId) ?? stage.agentId.slice(0, 8)) : null}
                             isLast
+                            isEditing={isEditMode}
                             onUpdate={(data) => updateStage.mutate({ stageId: stage.id, data })}
-                            onDelete={() => deleteStage.mutate(stage.id)}
+                            onDelete={() => setDeletingStage(stage)}
                             onEdit={() => setEditingStage(stage)}
                           />
                         ))}
@@ -814,6 +845,31 @@ export function PipelineDetail() {
           onSave={(data) => updateStage.mutate({ stageId: editingStage.id, data })}
         />
       )}
+
+      {/* Delete confirmation dialog */}
+      <Dialog open={!!deletingStage} onOpenChange={(open) => { if (!open) setDeletingStage(null); }}>
+        <DialogContent className="sm:max-w-sm">
+          <h3 className="text-lg font-semibold">Delete stage &ldquo;{deletingStage?.name}&rdquo;?</h3>
+          <p className="text-sm text-muted-foreground mt-1">This cannot be undone.</p>
+          <div className="flex justify-end gap-2 mt-4">
+            <Button variant="outline" size="sm" onClick={() => setDeletingStage(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => {
+                if (deletingStage) {
+                  deleteStage.mutate(deletingStage.id);
+                  setDeletingStage(null);
+                }
+              }}
+            >
+              Delete
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

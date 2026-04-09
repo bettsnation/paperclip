@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { and, asc, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { approvalDecisions, approvals, issues, issueApprovals, issueComments, pipelineRuns, pipelineStages } from "@paperclipai/db";
+import { approvals, issues, issueApprovals, issueComments, pipelineRuns, pipelineStages } from "@paperclipai/db";
 import {
   createPipelineSchema,
   updatePipelineSchema,
@@ -161,6 +161,53 @@ export function pipelineRoutes(db: Db) {
     });
 
     res.status(201).json(pipeline);
+  });
+
+  router.put("/projects/:projectId/pipeline", async (req, res) => {
+    const projectId = req.params.projectId as string;
+    const { pipelineId } = req.body as { pipelineId?: string };
+    if (!pipelineId) {
+      throw unprocessable("pipelineId is required");
+    }
+
+    const project = await projectSvc.getById(projectId);
+    if (!project) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    assertCompanyAccess(req, project.companyId);
+
+    const pipeline = await svc.getById(pipelineId);
+    if (!pipeline) {
+      res.status(404).json({ error: "Pipeline not found" });
+      return;
+    }
+    if (pipeline.companyId !== project.companyId) {
+      res.status(403).json({ error: "Pipeline belongs to a different company" });
+      return;
+    }
+
+    const existing = await svc.getByProjectId(projectId);
+    if (existing && existing.id !== pipelineId) {
+      res.status(409).json({ error: "Project already has a different pipeline attached" });
+      return;
+    }
+
+    const updated = await svc.update(pipelineId, { projectId });
+
+    const actor = getActorInfo(req);
+    await logActivity(db, {
+      companyId: project.companyId,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      agentId: actor.agentId,
+      action: "pipeline.attached",
+      entityType: "pipeline",
+      entityId: pipelineId,
+      details: { name: pipeline.name, projectId },
+    });
+
+    res.json(updated);
   });
 
   router.delete("/projects/:projectId/pipeline", async (req, res) => {
@@ -518,193 +565,6 @@ export function pipelineRoutes(db: Db) {
     res.json(result);
   });
 
-  // --- Multi-approver: approval decisions ---
-
-  router.get("/approvals/:id/decisions", async (req, res) => {
-    const approvalId = req.params.id as string;
-    const [approval] = await db
-      .select()
-      .from(approvals)
-      .where(eq(approvals.id, approvalId));
-    if (!approval) {
-      res.status(404).json({ error: "Approval not found" });
-      return;
-    }
-    assertCompanyAccess(req, approval.companyId);
-
-    const decisions = await db
-      .select()
-      .from(approvalDecisions)
-      .where(eq(approvalDecisions.approvalId, approvalId))
-      .orderBy(asc(approvalDecisions.createdAt));
-
-    res.json(decisions);
-  });
-
-  router.post("/approvals/:id/decisions", async (req, res) => {
-    assertBoard(req);
-
-    const approvalId = req.params.id as string;
-    const { decision, comment } = req.body as { decision?: string; comment?: string };
-
-    if (!decision || !["approve", "reject"].includes(decision)) {
-      throw unprocessable("decision must be 'approve' or 'reject'");
-    }
-
-    const result = await db.transaction(async (tx) => {
-      const [approval] = await tx
-        .select()
-        .from(approvals)
-        .where(eq(approvals.id, approvalId));
-      if (!approval) throw notFound("Approval not found");
-      assertCompanyAccess(req, approval.companyId);
-
-      if (approval.status !== "pending") {
-        throw conflict("Approval is no longer pending");
-      }
-
-      const actor = getActorInfo(req);
-
-      // Record the individual decision
-      const [decisionRow] = await tx
-        .insert(approvalDecisions)
-        .values({
-          approvalId,
-          agentId: actor.agentId ?? null,
-          userId: actor.actorId,
-          decision,
-          comment: comment?.trim() || null,
-        })
-        .returning();
-
-      // If rejection, immediately fail the approval
-      if (decision === "reject") {
-        await tx
-          .update(approvals)
-          .set({
-            status: "rejected",
-            decidedByUserId: actor.actorId,
-            decisionNote: comment?.trim() || "Rejected via multi-approver vote",
-            updatedAt: new Date(),
-          })
-          .where(eq(approvals.id, approvalId));
-
-        // Advance pipeline — find linked issue and handle rejection
-        const linkedIssues = await tx
-          .select({ issueId: issueApprovals.issueId })
-          .from(issueApprovals)
-          .where(eq(issueApprovals.approvalId, approvalId));
-
-        for (const { issueId } of linkedIssues) {
-          const [run] = await tx
-            .select()
-            .from(pipelineRuns)
-            .where(and(eq(pipelineRuns.issueId, issueId), eq(pipelineRuns.status, "running")));
-
-          if (run) {
-            await tx
-              .update(pipelineRuns)
-              .set({ status: "failed", updatedAt: new Date() })
-              .where(eq(pipelineRuns.id, run.id));
-
-            await tx
-              .update(issues)
-              .set({ status: "blocked", updatedAt: new Date() })
-              .where(eq(issues.id, issueId));
-          }
-        }
-
-        const [updated] = await tx
-          .select()
-          .from(approvals)
-          .where(eq(approvals.id, approvalId));
-        return { approval: updated, decision: decisionRow, resolved: true };
-      }
-
-      // For approve, count existing approvals to see if threshold met
-      const payload = (approval.payload ?? {}) as Record<string, unknown>;
-      const requiredCount = (typeof payload.approverCount === "number" ? payload.approverCount : 1);
-
-      const existingApprovals = await tx
-        .select()
-        .from(approvalDecisions)
-        .where(and(
-          eq(approvalDecisions.approvalId, approvalId),
-          eq(approvalDecisions.decision, "approve"),
-        ));
-
-      if (existingApprovals.length >= requiredCount) {
-        // Threshold met — resolve the approval as approved
-        await tx
-          .update(approvals)
-          .set({
-            status: "approved",
-            decidedByUserId: actor.actorId,
-            decisionNote: `Approved with ${existingApprovals.length}/${requiredCount} votes`,
-            updatedAt: new Date(),
-          })
-          .where(eq(approvals.id, approvalId));
-
-        // Advance pipeline — find linked issue and resolve the approval stage as done
-        const linkedIssues = await tx
-          .select({ issueId: issueApprovals.issueId })
-          .from(issueApprovals)
-          .where(eq(issueApprovals.approvalId, approvalId));
-
-        for (const { issueId } of linkedIssues) {
-          const [run] = await tx
-            .select()
-            .from(pipelineRuns)
-            .where(and(eq(pipelineRuns.issueId, issueId), eq(pipelineRuns.status, "running")));
-
-          if (run && run.currentStageId) {
-            const [currentStage] = await tx
-              .select()
-              .from(pipelineStages)
-              .where(eq(pipelineStages.id, run.currentStageId));
-
-            if (currentStage && currentStage.stageType === "approval") {
-              // Setting the issue to "done" triggers evaluatePipelineTransition() on the
-              // next status-change path (issue update service), which resolves the approval
-              // stage and advances the pipeline to the next stage. This indirect approach
-              // reuses the existing pipeline engine logic rather than duplicating it here.
-              await tx
-                .update(issues)
-                .set({ status: "done", completedAt: new Date(), updatedAt: new Date() })
-                .where(eq(issues.id, issueId));
-            }
-          }
-        }
-
-        const [updated] = await tx
-          .select()
-          .from(approvals)
-          .where(eq(approvals.id, approvalId));
-        return { approval: updated, decision: decisionRow, resolved: true };
-      }
-
-      // Not yet at threshold
-      const [updated] = await tx
-        .select()
-        .from(approvals)
-        .where(eq(approvals.id, approvalId));
-      return { approval: updated, decision: decisionRow, resolved: false };
-    });
-
-    const actor = getActorInfo(req);
-    await logActivity(db, {
-      companyId: result.approval.companyId,
-      actorType: actor.actorType,
-      actorId: actor.actorId,
-      agentId: actor.agentId,
-      action: `approval_decision.${decision}`,
-      entityType: "approval",
-      entityId: approvalId,
-      details: { decision, resolved: result.resolved },
-    });
-
-    res.status(201).json(result);
-  });
 
   return router;
 }

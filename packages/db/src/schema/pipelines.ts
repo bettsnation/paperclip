@@ -8,7 +8,6 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import { agents } from "./agents.js";
-import { approvals } from "./approvals.js";
 import { companies } from "./companies.js";
 import { issues } from "./issues.js";
 import { projects } from "./projects.js";
@@ -44,8 +43,6 @@ export const pipelineStages = pgTable(
     onReject: text("on_reject").notNull().default("stop"),
     timeoutMinutes: integer("timeout_minutes"),
     subPipelineId: uuid("sub_pipeline_id").references(() => pipelines.id, { onDelete: "set null" }),
-    approverCount: integer("approver_count").notNull().default(1),
-    approverAgentIds: jsonb("approver_agent_ids").$type<string[]>().default([]),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -77,18 +74,3 @@ export const pipelineRuns = pgTable(
   }),
 );
 
-export const approvalDecisions = pgTable(
-  "approval_decisions",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    approvalId: uuid("approval_id").notNull().references(() => approvals.id, { onDelete: "cascade" }),
-    agentId: uuid("agent_id").references(() => agents.id, { onDelete: "set null" }),
-    userId: text("user_id"),
-    decision: text("decision").notNull(),
-    comment: text("comment"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (table) => ({
-    approvalIdx: index("approval_decisions_approval_idx").on(table.approvalId),
-  }),
-);
