@@ -31,7 +31,8 @@ import { Button } from "@/components/ui/button";
 import { Tabs } from "@/components/ui/tabs";
 import { PluginLauncherOutlet } from "@/plugins/launchers";
 import { PluginSlotMount, PluginSlotOutlet, usePluginSlots } from "@/plugins/slots";
-import { Copy, FolderOpen, GitBranch, Loader2, Play, Square } from "lucide-react";
+import { Copy, ExternalLink, FolderOpen, GitBranch, Loader2, Play, Square } from "lucide-react";
+import { pipelinesApi } from "../api/pipelines";
 import { IssuesQuicklook } from "../components/IssuesQuicklook";
 
 /* ── Top-level tab types ── */
@@ -439,6 +440,95 @@ function ProjectWorkspacesContent({
 }
 
 /* ── Main project page ── */
+
+function ProjectPipelineConfig({ projectId, companyId }: { projectId: string; companyId: string }) {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const { pushToast } = useToast();
+  const [selectedPipelineId, setSelectedPipelineId] = useState<string>("");
+
+  const { data: projectPipeline, isLoading: pipelineLoading } = useQuery({
+    queryKey: queryKeys.pipelines.projectPipeline(projectId),
+    queryFn: () => pipelinesApi.getProjectPipeline(projectId).catch(() => null),
+    enabled: !!projectId,
+  });
+
+  const { data: allPipelines } = useQuery({
+    queryKey: queryKeys.pipelines.list(companyId),
+    queryFn: () => pipelinesApi.list(companyId),
+    enabled: !!companyId,
+  });
+
+  const attachPipeline = useMutation({
+    mutationFn: (pipelineId: string) => {
+      const pipeline = (allPipelines ?? []).find((p) => p.id === pipelineId);
+      return pipelinesApi.attachProjectPipeline(projectId, {
+        name: pipeline?.name ?? "Pipeline",
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.pipelines.projectPipeline(projectId) });
+      setSelectedPipelineId("");
+    },
+    onError: (err) => {
+      pushToast({ title: "Failed to attach pipeline", body: err.message, tone: "error" });
+    },
+  });
+
+  return (
+    <div className="mt-6 pt-6 border-t border-border space-y-3">
+      <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Pipeline</h3>
+      {pipelineLoading ? (
+        <p className="text-sm text-muted-foreground">Loading...</p>
+      ) : projectPipeline ? (
+        <div className="flex items-center gap-3 rounded-md border border-border p-3">
+          <GitBranch className="h-4 w-4 text-muted-foreground shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium">{projectPipeline.name}</p>
+            <p className="text-xs text-muted-foreground">Status: {projectPipeline.status}</p>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-xs"
+            onClick={() => navigate(`/pipelines/${projectPipeline.id}`)}
+          >
+            <ExternalLink className="h-3 w-3 mr-1" />
+            View
+          </Button>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <p className="text-sm text-muted-foreground">No pipeline attached to this project.</p>
+          {allPipelines && allPipelines.length > 0 && (
+            <div className="flex items-center gap-2">
+              <select
+                value={selectedPipelineId}
+                onChange={(e) => setSelectedPipelineId(e.target.value)}
+                className="rounded-md border border-input bg-background px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-ring"
+              >
+                <option value="">Select a pipeline...</option>
+                {allPipelines.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!selectedPipelineId || attachPipeline.isPending}
+                onClick={() => {
+                  if (selectedPipelineId) attachPipeline.mutate(selectedPipelineId);
+                }}
+              >
+                Attach
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function ProjectDetail() {
   const { companyPrefix, projectId, filter } = useParams<{
@@ -909,6 +999,7 @@ export function ProjectDetail() {
             onArchive={(archived) => archiveProject.mutate(archived)}
             archivePending={archiveProject.isPending}
           />
+          <ProjectPipelineConfig projectId={project.id} companyId={resolvedCompanyId!} />
         </div>
       )}
 

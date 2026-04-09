@@ -10,6 +10,7 @@ import {
   Network,
   Boxes,
   Repeat,
+  GitBranch,
   Settings,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
@@ -101,6 +102,7 @@ export function Sidebar() {
           <SidebarNavItem to="/issues" label="Issues" icon={CircleDot} />
           <SidebarNavItem to="/routines" label="Routines" icon={Repeat} textBadge="Beta" textBadgeTone="amber" />
           <SidebarNavItem to="/goals" label="Goals" icon={Target} />
+          <SidebarNavItem to="/pipelines" label="Pipelines" icon={GitBranch} />
         </SidebarSection>
 
         <SidebarProjects />
