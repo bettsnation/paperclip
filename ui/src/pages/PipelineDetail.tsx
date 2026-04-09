@@ -172,7 +172,7 @@ export function PipelineDetail() {
   const [showAddStage, setShowAddStage] = useState(false);
   const [newStageName, setNewStageName] = useState("");
   const [newStageType, setNewStageType] = useState<string>("action");
-  const [newStageAgentId, setNewStageAgentId] = useState<string>("");
+  const [newStageAgentId, setNewStageAgentId] = useState<string>("__none__");
   const [newStageOnComplete, setNewStageOnComplete] = useState<string>("next");
   const [newStageOnReject, setNewStageOnReject] = useState<string>("stop");
 
@@ -269,7 +269,7 @@ export function PipelineDetail() {
   function resetStageForm() {
     setNewStageName("");
     setNewStageType("action");
-    setNewStageAgentId("");
+    setNewStageAgentId("__none__");
     setNewStageOnComplete("next");
     setNewStageOnReject("stop");
   }
@@ -357,7 +357,7 @@ export function PipelineDetail() {
                 name: newStageName.trim(),
                 stageType: newStageType,
                 stageOrder: sortedStages.length,
-                agentId: newStageAgentId || null,
+                agentId: newStageAgentId === "__none__" ? null : newStageAgentId || null,
                 onComplete: newStageOnComplete,
                 onReject: newStageOnReject,
               });
@@ -395,11 +395,11 @@ export function PipelineDetail() {
               <label className="text-sm font-medium">Assigned Agent</label>
               <Select value={newStageAgentId} onValueChange={setNewStageAgentId}>
                 <SelectTrigger className="mt-1">
-                  <SelectValue placeholder="None" />
+                  <SelectValue placeholder="No agent (approval stage)" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">None</SelectItem>
-                  {(agents ?? []).map((agent) => (
+                  <SelectItem value="__none__">No agent (approval stage)</SelectItem>
+                  {(agents ?? []).filter((agent) => agent.id).map((agent) => (
                     <SelectItem key={agent.id} value={agent.id}>
                       {agent.name}
                     </SelectItem>
