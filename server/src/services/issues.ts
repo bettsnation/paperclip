@@ -210,7 +210,7 @@ function resolveCompletion(
   if (currentStage.onComplete === "done" || currentIdx >= allStages.length - 1) {
     // Pipeline complete — issue stays "done", run marked completed
     return {
-      runPatch: { status: "completed", currentStageId: currentStage.id, updatedAt: new Date() },
+      runPatch: { status: "completed", currentStageId: currentStage.id, stageEnteredAt: null, updatedAt: new Date() },
     };
   }
 
@@ -221,7 +221,7 @@ function resolveCompletion(
   const action: Omit<PipelineAction, "pipelineRunId"> = {
     overrideStatus: nextStatus,
     overrideAssigneeAgentId: nextStage.agentId ?? null,
-    runPatch: { currentStageId: nextStage.id, updatedAt: new Date() },
+    runPatch: { currentStageId: nextStage.id, stageEnteredAt: new Date(), updatedAt: new Date() },
   };
 
   // Auto-create approval when entering an approval stage
@@ -256,14 +256,14 @@ function resolveRejection(
         // No previous stage — treat as stop
         return {
           overrideStatus: "blocked",
-          runPatch: { status: "failed", updatedAt: new Date() },
+          runPatch: { status: "failed", stageEnteredAt: null, updatedAt: new Date() },
         };
       }
       const prevStage = allStages[currentIdx - 1];
       return {
         overrideStatus: defaultStatusForStageType(prevStage.stageType),
         overrideAssigneeAgentId: prevStage.agentId ?? null,
-        runPatch: { currentStageId: prevStage.id, updatedAt: new Date() },
+        runPatch: { currentStageId: prevStage.id, stageEnteredAt: new Date(), updatedAt: new Date() },
       };
     }
 
@@ -272,14 +272,14 @@ function resolveRejection(
       return {
         overrideStatus: defaultStatusForStageType(firstStage.stageType),
         overrideAssigneeAgentId: firstStage.agentId ?? null,
-        runPatch: { currentStageId: firstStage.id, updatedAt: new Date() },
+        runPatch: { currentStageId: firstStage.id, stageEnteredAt: new Date(), updatedAt: new Date() },
       };
     }
 
     default: // "stop"
       return {
         overrideStatus: "blocked",
-        runPatch: { status: "failed", updatedAt: new Date() },
+        runPatch: { status: "failed", stageEnteredAt: null, updatedAt: new Date() },
       };
   }
 }
@@ -1841,6 +1841,7 @@ export function issueService(db: Db) {
                 issueId: issue.id,
                 currentStageId: firstStage.id,
                 status: "running",
+                stageEnteredAt: new Date(),
               });
 
               // Assign the first stage's agent if set and issue has no assignee yet

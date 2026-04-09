@@ -31,6 +31,7 @@ import { setupLiveEventsWebSocketServer } from "./realtime/live-events-ws.js";
 import {
   feedbackService,
   heartbeatService,
+  pipelineTimeoutService,
   reconcilePersistedRuntimeServicesOnStartup,
   routineService,
 } from "./services/index.js";
@@ -576,6 +577,7 @@ export async function startServer(): Promise<StartedServer> {
   if (config.heartbeatSchedulerEnabled) {
     const heartbeat = heartbeatService(db as any);
     const routines = routineService(db as any);
+    const pipelineTimeouts = pipelineTimeoutService(db as any);
   
     // Reap orphaned running runs at startup while in-memory execution state is empty,
     // then resume any persisted queued runs that were waiting on the previous process.
@@ -608,6 +610,17 @@ export async function startServer(): Promise<StartedServer> {
           logger.error({ err }, "routine scheduler tick failed");
         });
   
+      void pipelineTimeouts
+        .checkTimeouts()
+        .then((result) => {
+          if (result.timedOut > 0) {
+            logger.info({ ...result }, "pipeline timeout check blocked issues");
+          }
+        })
+        .catch((err) => {
+          logger.error({ err }, "pipeline timeout check failed");
+        });
+
       // Periodically reap orphaned runs (5-min staleness threshold) and make sure
       // persisted queued work is still being driven forward.
       void heartbeat

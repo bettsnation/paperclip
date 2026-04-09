@@ -17,6 +17,7 @@ export interface PipelineStage {
   stageType: string;
   onComplete: string;
   onReject: string;
+  timeoutMinutes: number | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -28,6 +29,7 @@ export interface PipelineRun {
   currentStageId: string | null;
   status: string;
   stateJson: Record<string, unknown> | null;
+  stageEnteredAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }

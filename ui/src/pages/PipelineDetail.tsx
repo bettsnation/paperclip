@@ -18,6 +18,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import {
   ArrowRight,
+  Clock,
   GripVertical,
   Plus,
   Trash2,
@@ -113,6 +114,12 @@ function SortableStage({ stage, agentName, isLast, onUpdate, onDelete }: Sortabl
           <span>
             On reject: <span className="text-foreground">{stage.onReject}</span>
           </span>
+          {stage.timeoutMinutes != null && (
+            <span className="flex items-center gap-1">
+              <Clock className="h-3 w-3" />
+              Timeout: <span className="text-foreground">{stage.timeoutMinutes}m</span>
+            </span>
+          )}
         </div>
       </div>
       {!isLast && (
@@ -175,6 +182,7 @@ export function PipelineDetail() {
   const [newStageAgentId, setNewStageAgentId] = useState<string>("__none__");
   const [newStageOnComplete, setNewStageOnComplete] = useState<string>("next");
   const [newStageOnReject, setNewStageOnReject] = useState<string>("stop");
+  const [newStageTimeout, setNewStageTimeout] = useState<string>("");
 
   const sensors = useSensors(useSensor(MouseSensor, { activationConstraint: { distance: 5 } }));
 
@@ -272,6 +280,7 @@ export function PipelineDetail() {
     setNewStageAgentId("__none__");
     setNewStageOnComplete("next");
     setNewStageOnReject("stop");
+    setNewStageTimeout("");
   }
 
   function handleDragEnd(event: DragEndEvent) {
@@ -353,6 +362,7 @@ export function PipelineDetail() {
             onSubmit={(e) => {
               e.preventDefault();
               if (!newStageName.trim()) return;
+              const timeoutVal = newStageTimeout.trim() ? parseInt(newStageTimeout, 10) : null;
               createStage.mutate({
                 name: newStageName.trim(),
                 stageType: newStageType,
@@ -360,6 +370,7 @@ export function PipelineDetail() {
                 agentId: newStageAgentId === "__none__" ? null : newStageAgentId || null,
                 onComplete: newStageOnComplete,
                 onReject: newStageOnReject,
+                timeoutMinutes: timeoutVal && timeoutVal > 0 ? timeoutVal : null,
               });
             }}
             className="space-y-4 mt-2"
@@ -439,6 +450,21 @@ export function PipelineDetail() {
                   </SelectContent>
                 </Select>
               </div>
+            </div>
+
+            <div>
+              <label className="text-sm font-medium">Timeout (minutes)</label>
+              <input
+                type="number"
+                min="1"
+                value={newStageTimeout}
+                onChange={(e) => setNewStageTimeout(e.target.value)}
+                placeholder="No timeout"
+                className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                Leave empty for no timeout. Issues exceeding this will be blocked.
+              </p>
             </div>
 
             <div className="flex justify-end gap-2">
