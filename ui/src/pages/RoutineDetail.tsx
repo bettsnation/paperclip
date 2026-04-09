@@ -960,8 +960,8 @@ export function RoutineDetail() {
                   </SelectTrigger>
                   <SelectContent>
                     {triggerKinds.map((kind) => (
-                      <SelectItem key={kind} value={kind} disabled={kind === "webhook"}>
-                        {kind}{kind === "webhook" ? " — COMING SOON" : ""}
+                      <SelectItem key={kind} value={kind}>
+                        {kind}
                       </SelectItem>
                     ))}
                   </SelectContent>
