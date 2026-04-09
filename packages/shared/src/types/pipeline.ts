@@ -18,6 +18,9 @@ export interface PipelineStage {
   onComplete: string;
   onReject: string;
   timeoutMinutes: number | null;
+  subPipelineId: string | null;
+  approverCount: number;
+  approverAgentIds: string[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -27,9 +30,20 @@ export interface PipelineRun {
   pipelineId: string;
   issueId: string | null;
   currentStageId: string | null;
+  parentRunId: string | null;
   status: string;
   stateJson: Record<string, unknown> | null;
   stageEnteredAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface ApprovalDecision {
+  id: string;
+  approvalId: string;
+  agentId: string | null;
+  userId: string | null;
+  decision: string;
+  comment: string | null;
+  createdAt: Date;
 }

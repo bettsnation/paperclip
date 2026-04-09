@@ -7,6 +7,7 @@ const stageTypeBadgeColors: Record<string, string> = {
   action: "border-blue-500/40 bg-blue-500/10 text-blue-600 dark:text-blue-400",
   review: "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400",
   approval: "border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+  sub_pipeline: "border-purple-500/40 bg-purple-500/10 text-purple-600 dark:text-purple-400",
 };
 
 interface PipelineStageBadgeProps {

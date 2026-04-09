@@ -8,6 +8,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import { agents } from "./agents.js";
+import { approvals } from "./approvals.js";
 import { companies } from "./companies.js";
 import { issues } from "./issues.js";
 import { projects } from "./projects.js";
@@ -41,6 +42,9 @@ export const pipelineStages = pgTable(
     onComplete: text("on_complete").notNull().default("next"),
     onReject: text("on_reject").notNull().default("stop"),
     timeoutMinutes: integer("timeout_minutes"),
+    subPipelineId: uuid("sub_pipeline_id").references(() => pipelines.id, { onDelete: "set null" }),
+    approverCount: integer("approver_count").notNull().default(1),
+    approverAgentIds: jsonb("approver_agent_ids").$type<string[]>().default([]),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -57,6 +61,7 @@ export const pipelineRuns = pgTable(
     pipelineId: uuid("pipeline_id").notNull().references(() => pipelines.id, { onDelete: "cascade" }),
     issueId: uuid("issue_id").references(() => issues.id, { onDelete: "set null" }),
     currentStageId: uuid("current_stage_id").references(() => pipelineStages.id, { onDelete: "set null" }),
+    parentRunId: uuid("parent_run_id"),
     status: text("status").notNull().default("pending"),
     stateJson: jsonb("state_json").$type<Record<string, unknown>>(),
     stageEnteredAt: timestamp("stage_entered_at", { withTimezone: true }),
@@ -67,5 +72,22 @@ export const pipelineRuns = pgTable(
     pipelineIdx: index("pipeline_runs_pipeline_idx").on(table.pipelineId),
     issueIdx: index("pipeline_runs_issue_idx").on(table.issueId),
     statusIdx: index("pipeline_runs_status_idx").on(table.pipelineId, table.status),
+    parentRunIdx: index("pipeline_runs_parent_run_idx").on(table.parentRunId),
+  }),
+);
+
+export const approvalDecisions = pgTable(
+  "approval_decisions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    approvalId: uuid("approval_id").notNull().references(() => approvals.id, { onDelete: "cascade" }),
+    agentId: uuid("agent_id").references(() => agents.id, { onDelete: "set null" }),
+    userId: text("user_id"),
+    decision: text("decision").notNull(),
+    comment: text("comment"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    approvalIdx: index("approval_decisions_approval_idx").on(table.approvalId),
   }),
 );

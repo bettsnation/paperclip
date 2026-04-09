@@ -60,4 +60,4 @@ export { pluginEntities } from "./plugin_entities.js";
 export { pluginJobs, pluginJobRuns } from "./plugin_jobs.js";
 export { pluginWebhookDeliveries } from "./plugin_webhooks.js";
 export { pluginLogs } from "./plugin_logs.js";
-export { pipelines, pipelineStages, pipelineRuns } from "./pipelines.js";
+export { pipelines, pipelineStages, pipelineRuns, approvalDecisions } from "./pipelines.js";

@@ -199,7 +199,7 @@ export type RoutineRunSource = (typeof ROUTINE_RUN_SOURCES)[number];
 export const PIPELINE_STATUSES = ["active", "paused", "archived"] as const;
 export type PipelineStatus = (typeof PIPELINE_STATUSES)[number];
 
-export const PIPELINE_STAGE_TYPES = ["action", "review", "approval"] as const;
+export const PIPELINE_STAGE_TYPES = ["action", "review", "approval", "sub_pipeline"] as const;
 export type PipelineStageType = (typeof PIPELINE_STAGE_TYPES)[number];
 
 export const PIPELINE_STAGE_ON_COMPLETE = ["next", "done"] as const;
