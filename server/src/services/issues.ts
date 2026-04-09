@@ -21,6 +21,7 @@ import {
   issueReadStates,
   issues,
   labels,
+  pipelines,
   pipelineRuns,
   pipelineStages,
   projectWorkspaces,
@@ -1793,6 +1794,48 @@ export function issueService(db: Db) {
             tx,
           );
         }
+
+        // Auto-start pipeline run if the project has an active pipeline
+        if (issue.projectId) {
+          const pipeline = await tx
+            .select()
+            .from(pipelines)
+            .where(
+              and(
+                eq(pipelines.projectId, issue.projectId),
+                eq(pipelines.companyId, companyId),
+                eq(pipelines.status, "active"),
+              ),
+            )
+            .then((rows: Array<typeof pipelines.$inferSelect>) => rows[0] ?? null);
+
+          if (pipeline) {
+            const stages = await tx
+              .select()
+              .from(pipelineStages)
+              .where(eq(pipelineStages.pipelineId, pipeline.id))
+              .orderBy(asc(pipelineStages.stageOrder));
+
+            if (stages.length > 0) {
+              const firstStage = stages[0];
+              await tx.insert(pipelineRuns).values({
+                pipelineId: pipeline.id,
+                issueId: issue.id,
+                currentStageId: firstStage.id,
+                status: "running",
+              });
+
+              // Assign the first stage's agent if set and issue has no assignee yet
+              if (firstStage.agentId && !issue.assigneeAgentId) {
+                await tx
+                  .update(issues)
+                  .set({ assigneeAgentId: firstStage.agentId })
+                  .where(eq(issues.id, issue.id));
+              }
+            }
+          }
+        }
+
         const [enriched] = await withIssueLabels(tx, [issue]);
         return enriched;
       });
