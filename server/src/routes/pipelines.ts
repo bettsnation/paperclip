@@ -9,7 +9,7 @@ import {
   updatePipelineStageSchema,
 } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
-import { pipelineService, projectService, logActivity } from "../services/index.js";
+import { pipelineService, projectService, logActivity, groupStagesByOrder } from "../services/index.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { conflict, notFound, unprocessable } from "../errors.js";
 
@@ -377,13 +377,7 @@ export function pipelineRoutes(db: Db) {
       const newStateJson = { ...existingState, skipLog, completedStageIds };
 
       // 5. Group stages by stageOrder for parallel support
-      const groupMap = new Map<number, typeof allStages>();
-      for (const s of allStages) {
-        let g = groupMap.get(s.stageOrder);
-        if (!g) { g = []; groupMap.set(s.stageOrder, g); }
-        g.push(s);
-      }
-      const groups = [...groupMap.entries()].sort(([a], [b]) => a - b).map(([, g]) => g);
+      const groups = groupStagesByOrder(allStages);
       const currentGroupIdx = groups.findIndex((g) => g.some((s) => s.id === currentStage.id));
       const currentGroup = groups[currentGroupIdx];
 
@@ -645,7 +639,10 @@ export function pipelineRoutes(db: Db) {
               .where(eq(pipelineStages.id, run.currentStageId));
 
             if (currentStage && currentStage.stageType === "approval") {
-              // Mark issue as done to trigger pipeline advancement
+              // Setting the issue to "done" triggers evaluatePipelineTransition() on the
+              // next status-change path (issue update service), which resolves the approval
+              // stage and advances the pipeline to the next stage. This indirect approach
+              // reuses the existing pipeline engine logic rather than duplicating it here.
               await tx
                 .update(issues)
                 .set({ status: "done", completedAt: new Date(), updatedAt: new Date() })

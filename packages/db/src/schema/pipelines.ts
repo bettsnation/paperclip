@@ -61,7 +61,7 @@ export const pipelineRuns = pgTable(
     pipelineId: uuid("pipeline_id").notNull().references(() => pipelines.id, { onDelete: "cascade" }),
     issueId: uuid("issue_id").references(() => issues.id, { onDelete: "set null" }),
     currentStageId: uuid("current_stage_id").references(() => pipelineStages.id, { onDelete: "set null" }),
-    parentRunId: uuid("parent_run_id"),
+    parentRunId: uuid("parent_run_id").references((): any => pipelineRuns.id, { onDelete: "set null" }),
     status: text("status").notNull().default("pending"),
     stateJson: jsonb("state_json").$type<Record<string, unknown>>(),
     stageEnteredAt: timestamp("stage_entered_at", { withTimezone: true }),

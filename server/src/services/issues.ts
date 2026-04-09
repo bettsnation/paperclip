@@ -220,7 +220,7 @@ async function evaluatePipelineTransition(
 }
 
 /** Group stages by stageOrder and return ordered groups. */
-function groupStagesByOrder(
+export function groupStagesByOrder(
   allStages: Array<typeof pipelineStages.$inferSelect>,
 ): Array<Array<typeof pipelineStages.$inferSelect>> {
   const map = new Map<number, Array<typeof pipelineStages.$inferSelect>>();
@@ -448,13 +448,15 @@ async function applyPipelineAction(
     }
   }
 
-  // If the pipeline run just completed, check if it has a parent to advance
+  // If the pipeline run just completed and has a parent, auto-advance the parent's sub_pipeline stage.
+  // We re-read the run to get the fully updated row (including parentRunId which may not be on the
+  // partial `run` object passed to applyPipelineAction).
   if (action.runPatch.status === "completed") {
     const [completedRun] = await tx
       .select()
       .from(pipelineRuns)
       .where(eq(pipelineRuns.id, run.id));
-    if (completedRun) {
+    if (completedRun?.parentRunId) {
       await advanceParentOnChildCompletion(tx, completedRun);
     }
   }
