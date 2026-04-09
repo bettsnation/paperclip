@@ -19,6 +19,7 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   ArrowRight,
   GripVertical,
+  Layers,
   Plus,
   Trash2,
 } from "lucide-react";
@@ -175,6 +176,7 @@ export function PipelineDetail() {
   const [newStageAgentId, setNewStageAgentId] = useState<string>("__none__");
   const [newStageOnComplete, setNewStageOnComplete] = useState<string>("next");
   const [newStageOnReject, setNewStageOnReject] = useState<string>("stop");
+  const [newStageParallelGroup, setNewStageParallelGroup] = useState<string>("__new__");
 
   const sensors = useSensors(useSensor(MouseSensor, { activationConstraint: { distance: 5 } }));
 
@@ -272,6 +274,7 @@ export function PipelineDetail() {
     setNewStageAgentId("__none__");
     setNewStageOnComplete("next");
     setNewStageOnReject("stop");
+    setNewStageParallelGroup("__new__");
   }
 
   function handleDragEnd(event: DragEndEvent) {
@@ -295,6 +298,15 @@ export function PipelineDetail() {
   if (!pipeline) return null;
 
   const sortedStages = [...(stages ?? [])].sort((a, b) => a.stageOrder - b.stageOrder);
+
+  // Group stages by stageOrder for parallel display
+  const stageGroupMap = new Map<number, PipelineStage[]>();
+  for (const s of sortedStages) {
+    let g = stageGroupMap.get(s.stageOrder);
+    if (!g) { g = []; stageGroupMap.set(s.stageOrder, g); }
+    g.push(s);
+  }
+  const orderedGroups = [...stageGroupMap.entries()].sort(([a], [b]) => a - b);
 
   return (
     <div className="space-y-6">
@@ -329,15 +341,41 @@ export function PipelineDetail() {
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
             <SortableContext items={sortedStages.map((s) => s.id)} strategy={verticalListSortingStrategy}>
               <div className="space-y-1">
-                {sortedStages.map((stage, i) => (
-                  <SortableStage
-                    key={stage.id}
-                    stage={stage}
-                    agentName={stage.agentId ? (agentMap.get(stage.agentId) ?? stage.agentId.slice(0, 8)) : null}
-                    isLast={i === sortedStages.length - 1}
-                    onUpdate={(data) => updateStage.mutate({ stageId: stage.id, data })}
-                    onDelete={() => deleteStage.mutate(stage.id)}
-                  />
+                {orderedGroups.map(([order, group], gi) => (
+                  group.length === 1 ? (
+                    <SortableStage
+                      key={group[0].id}
+                      stage={group[0]}
+                      agentName={group[0].agentId ? (agentMap.get(group[0].agentId) ?? group[0].agentId.slice(0, 8)) : null}
+                      isLast={gi === orderedGroups.length - 1}
+                      onUpdate={(data) => updateStage.mutate({ stageId: group[0].id, data })}
+                      onDelete={() => deleteStage.mutate(group[0].id)}
+                    />
+                  ) : (
+                    <div key={`group-${order}`} className="flex items-stretch gap-0">
+                      <div className="flex-1 border border-dashed border-muted-foreground/40 rounded-md bg-accent/20 p-2 space-y-1">
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <Layers className="h-3.5 w-3.5 text-muted-foreground" />
+                          <span className="text-xs font-medium text-muted-foreground">Parallel Group (order #{order + 1})</span>
+                        </div>
+                        {group.map((stage) => (
+                          <SortableStage
+                            key={stage.id}
+                            stage={stage}
+                            agentName={stage.agentId ? (agentMap.get(stage.agentId) ?? stage.agentId.slice(0, 8)) : null}
+                            isLast
+                            onUpdate={(data) => updateStage.mutate({ stageId: stage.id, data })}
+                            onDelete={() => deleteStage.mutate(stage.id)}
+                          />
+                        ))}
+                      </div>
+                      {gi < orderedGroups.length - 1 && (
+                        <div className="flex items-center px-1">
+                          <ArrowRight className="h-4 w-4 text-muted-foreground" />
+                        </div>
+                      )}
+                    </div>
+                  )
                 ))}
               </div>
             </SortableContext>
@@ -353,10 +391,21 @@ export function PipelineDetail() {
             onSubmit={(e) => {
               e.preventDefault();
               if (!newStageName.trim()) return;
+              // Determine stageOrder: use existing group order or append as new group
+              let stageOrder: number;
+              if (newStageParallelGroup !== "__new__") {
+                stageOrder = parseInt(newStageParallelGroup, 10);
+              } else {
+                // Next order = max existing order + 1, or 0 if none
+                const maxOrder = sortedStages.length > 0
+                  ? Math.max(...sortedStages.map((s) => s.stageOrder))
+                  : -1;
+                stageOrder = maxOrder + 1;
+              }
               createStage.mutate({
                 name: newStageName.trim(),
                 stageType: newStageType,
-                stageOrder: sortedStages.length,
+                stageOrder,
                 agentId: newStageAgentId === "__none__" ? null : newStageAgentId || null,
                 onComplete: newStageOnComplete,
                 onReject: newStageOnReject,
@@ -373,6 +422,23 @@ export function PipelineDetail() {
                 placeholder="e.g. Code Review"
                 className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
               />
+            </div>
+
+            <div>
+              <label className="text-sm font-medium">Placement</label>
+              <Select value={newStageParallelGroup} onValueChange={setNewStageParallelGroup}>
+                <SelectTrigger className="mt-1">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__new__">New step (sequential)</SelectItem>
+                  {orderedGroups.map(([order, group]) => (
+                    <SelectItem key={order} value={String(order)}>
+                      Parallel with: {group.map((s) => s.name).join(", ")} (#{order + 1})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             <div>
