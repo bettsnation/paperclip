@@ -26,6 +26,8 @@ export const pipelinesApi = {
     api.get<Pipeline>(`/projects/${projectId}/pipeline`),
   attachProjectPipeline: (projectId: string, data: Record<string, unknown>) =>
     api.post<Pipeline>(`/projects/${projectId}/pipeline`, data),
+  detachProjectPipeline: (projectId: string) =>
+    api.delete<void>(`/projects/${projectId}/pipeline`),
 
   // Pipeline runs
   getIssuePipelineRun: (issueId: string) =>

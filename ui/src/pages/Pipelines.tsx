@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@/lib/router";
-import { GitBranch, Plus, MoreHorizontal, Trash2 } from "lucide-react";
+import { GitBranch, Plus, MoreHorizontal, Trash2, Pencil, Copy, Pause, Play, Archive } from "lucide-react";
 import { pipelinesApi } from "../api/pipelines";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
@@ -16,6 +16,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
@@ -66,6 +67,36 @@ export function Pipelines() {
     },
   });
 
+  const duplicatePipeline = useMutation({
+    mutationFn: async (sourceId: string) => {
+      const source = pipelines?.find((p) => p.id === sourceId);
+      if (!source) return;
+      return pipelinesApi.create(selectedCompanyId!, { name: `${source.name} (copy)` });
+    },
+    onSuccess: (pipeline) => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.pipelines.list(selectedCompanyId!),
+      });
+      if (pipeline) navigate(`/pipelines/${pipeline.id}`);
+    },
+    onError: (err) => {
+      pushToast({ title: "Failed to duplicate pipeline", body: err.message, tone: "error" });
+    },
+  });
+
+  const updatePipelineStatus = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: string }) =>
+      pipelinesApi.update(id, { status }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.pipelines.list(selectedCompanyId!),
+      });
+    },
+    onError: (err) => {
+      pushToast({ title: "Failed to update pipeline", body: err.message, tone: "error" });
+    },
+  });
+
   if (!selectedCompanyId) {
     return <EmptyState icon={GitBranch} message="Select a company to view pipelines." />;
   }
@@ -76,6 +107,26 @@ export function Pipelines() {
 
   return (
     <div className="space-y-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div className="space-y-1">
+          <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
+            Pipelines
+            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
+              Beta
+            </span>
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Multi-stage workflows that automate issue progression through review, approval, and action stages.
+          </p>
+        </div>
+        {pipelines && pipelines.length > 0 && (
+          <Button size="sm" onClick={() => setShowCreate(true)}>
+            <Plus className="mr-2 h-4 w-4" />
+            New Pipeline
+          </Button>
+        )}
+      </div>
+
       {error && <p className="text-sm text-destructive">{error.message}</p>}
 
       {pipelines && pipelines.length === 0 && (
@@ -88,49 +139,92 @@ export function Pipelines() {
       )}
 
       {pipelines && pipelines.length > 0 && (
-        <>
-          <div className="flex items-center justify-start">
-            <Button size="sm" variant="outline" onClick={() => setShowCreate(true)}>
-              <Plus className="h-3.5 w-3.5 mr-1.5" />
-              New Pipeline
-            </Button>
-          </div>
-
-          <div className="border border-border rounded-md divide-y divide-border">
-            {pipelines.map((pipeline) => (
-              <div
-                key={pipeline.id}
-                className="flex items-center gap-3 px-4 py-3 hover:bg-accent/50 cursor-pointer transition-colors"
-                onClick={() => navigate(`/pipelines/${pipeline.id}`)}
-              >
-                <GitBranch className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">{pipeline.name}</p>
-                </div>
-                <StatusBadge status={pipeline.status} />
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
-                    <Button variant="ghost" size="icon-xs">
-                      <MoreHorizontal className="h-3.5 w-3.5" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
+        <div className="border border-border rounded-md divide-y divide-border">
+          {pipelines.map((pipeline) => (
+            <div
+              key={pipeline.id}
+              className="flex items-center gap-3 px-4 py-3 hover:bg-accent/50 cursor-pointer transition-colors"
+              onClick={() => navigate(`/pipelines/${pipeline.id}`)}
+            >
+              <GitBranch className="h-4 w-4 text-muted-foreground shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium truncate">{pipeline.name}</p>
+              </div>
+              <StatusBadge status={pipeline.status} />
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+                  <Button variant="ghost" size="icon-xs">
+                    <MoreHorizontal className="h-3.5 w-3.5" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      navigate(`/pipelines/${pipeline.id}`);
+                    }}
+                  >
+                    <Pencil className="h-3.5 w-3.5 mr-2" />
+                    Edit
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      duplicatePipeline.mutate(pipeline.id);
+                    }}
+                  >
+                    <Copy className="h-3.5 w-3.5 mr-2" />
+                    Duplicate
+                  </DropdownMenuItem>
+                  {pipeline.status === "active" ? (
                     <DropdownMenuItem
-                      className="text-destructive"
                       onClick={(e) => {
                         e.stopPropagation();
-                        deletePipeline.mutate(pipeline.id);
+                        updatePipelineStatus.mutate({ id: pipeline.id, status: "paused" });
                       }}
                     >
-                      <Trash2 className="h-3.5 w-3.5 mr-2" />
-                      Delete
+                      <Pause className="h-3.5 w-3.5 mr-2" />
+                      Pause
                     </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-            ))}
-          </div>
-        </>
+                  ) : pipeline.status === "paused" ? (
+                    <DropdownMenuItem
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        updatePipelineStatus.mutate({ id: pipeline.id, status: "active" });
+                      }}
+                    >
+                      <Play className="h-3.5 w-3.5 mr-2" />
+                      Resume
+                    </DropdownMenuItem>
+                  ) : null}
+                  <DropdownMenuItem
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      updatePipelineStatus.mutate({
+                        id: pipeline.id,
+                        status: pipeline.status === "archived" ? "active" : "archived",
+                      });
+                    }}
+                  >
+                    <Archive className="h-3.5 w-3.5 mr-2" />
+                    {pipeline.status === "archived" ? "Unarchive" : "Archive"}
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    className="text-destructive"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deletePipeline.mutate(pipeline.id);
+                    }}
+                  >
+                    <Trash2 className="h-3.5 w-3.5 mr-2" />
+                    Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          ))}
+        </div>
       )}
 
       <Dialog open={showCreate} onOpenChange={setShowCreate}>
