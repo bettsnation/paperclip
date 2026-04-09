@@ -200,31 +200,52 @@ async function evaluatePipelineTransition(
   return { pipelineRunId: run.id, ...result, currentStateJson: mergedStateJson };
 }
 
-function resolveCompletion(
+/** Group stages by stageOrder and return ordered groups. */
+function groupStagesByOrder(
+  allStages: Array<typeof pipelineStages.$inferSelect>,
+): Array<Array<typeof pipelineStages.$inferSelect>> {
+  const map = new Map<number, Array<typeof pipelineStages.$inferSelect>>();
+  for (const s of allStages) {
+    let group = map.get(s.stageOrder);
+    if (!group) {
+      group = [];
+      map.set(s.stageOrder, group);
+    }
+    group.push(s);
+  }
+  return [...map.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([, group]) => group);
+}
+
+/** Get the set of completed stage IDs from the pipeline run stateJson. */
+function getCompletedStageIds(run: typeof pipelineRuns.$inferSelect): Set<string> {
+  const state = (run.stateJson ?? {}) as Record<string, unknown>;
+  const ids = Array.isArray(state.completedStageIds) ? state.completedStageIds : [];
+  return new Set(ids.filter((id: unknown): id is string => typeof id === "string"));
+}
+
+/** Build an updated stateJson with a newly completed stage ID added. */
+function withCompletedStage(run: typeof pipelineRuns.$inferSelect, stageId: string): Record<string, unknown> {
+  const existing = (run.stateJson ?? {}) as Record<string, unknown>;
+  const ids = new Set(getCompletedStageIds(run));
+  ids.add(stageId);
+  return { ...existing, completedStageIds: [...ids] };
+}
+
+function buildAdvanceAction(
   existing: typeof issues.$inferSelect,
   run: typeof pipelineRuns.$inferSelect,
-  currentStage: typeof pipelineStages.$inferSelect,
-  allStages: Array<typeof pipelineStages.$inferSelect>,
-  currentIdx: number,
+  nextStage: typeof pipelineStages.$inferSelect,
+  newStateJson: Record<string, unknown>,
 ): Omit<PipelineAction, "pipelineRunId"> {
-  if (currentStage.onComplete === "done" || currentIdx >= allStages.length - 1) {
-    // Pipeline complete — issue stays "done", run marked completed
-    return {
-      runPatch: { status: "completed", currentStageId: currentStage.id, stageEnteredAt: null, updatedAt: new Date() },
-    };
-  }
-
-  // Advance to next stage
-  const nextStage = allStages[currentIdx + 1];
   const nextStatus = defaultStatusForStageType(nextStage.stageType);
-
   const action: Omit<PipelineAction, "pipelineRunId"> = {
     overrideStatus: nextStatus,
     overrideAssigneeAgentId: nextStage.agentId ?? null,
-    runPatch: { currentStageId: nextStage.id, stageEnteredAt: new Date(), updatedAt: new Date() },
+    runPatch: { currentStageId: nextStage.id, stageEnteredAt: new Date(), stateJson: newStateJson, updatedAt: new Date() },
   };
 
-  // Auto-create approval when entering an approval stage
   if (nextStage.stageType === "approval") {
     action.createApproval = {
       companyId: existing.companyId,
@@ -243,36 +264,89 @@ function resolveCompletion(
   return action;
 }
 
+function resolveCompletion(
+  existing: typeof issues.$inferSelect,
+  run: typeof pipelineRuns.$inferSelect,
+  currentStage: typeof pipelineStages.$inferSelect,
+  allStages: Array<typeof pipelineStages.$inferSelect>,
+  _currentIdx: number,
+): Omit<PipelineAction, "pipelineRunId"> {
+  if (currentStage.onComplete === "done") {
+    return {
+      runPatch: { status: "completed", currentStageId: currentStage.id, stateJson: withCompletedStage(run, currentStage.id), updatedAt: new Date() },
+    };
+  }
+
+  const groups = groupStagesByOrder(allStages);
+  const currentGroupIdx = groups.findIndex((g) => g.some((s) => s.id === currentStage.id));
+  const currentGroup = groups[currentGroupIdx];
+
+  // Track this stage as completed
+  const newStateJson = withCompletedStage(run, currentStage.id);
+  const completedIds = new Set(
+    (newStateJson.completedStageIds as string[]),
+  );
+
+  // Check if all stages in the current parallel group are now completed
+  const allGroupDone = currentGroup.every((s) => completedIds.has(s.id));
+
+  if (!allGroupDone) {
+    // Find next unfinished stage in the same group
+    const nextInGroup = currentGroup.find((s) => !completedIds.has(s.id));
+    if (nextInGroup) {
+      return buildAdvanceAction(existing, run, nextInGroup, newStateJson);
+    }
+  }
+
+  // All stages in group done — advance to next group
+  const isLastGroup = currentGroupIdx >= groups.length - 1;
+  if (isLastGroup) {
+    // Pipeline complete
+    return {
+      runPatch: { status: "completed", currentStageId: currentStage.id, stateJson: newStateJson, updatedAt: new Date() },
+    };
+  }
+
+  const nextGroup = groups[currentGroupIdx + 1];
+  const nextStage = nextGroup[0];
+  return buildAdvanceAction(existing, run, nextStage, newStateJson);
+}
+
 function resolveRejection(
   existing: typeof issues.$inferSelect,
   run: typeof pipelineRuns.$inferSelect,
   currentStage: typeof pipelineStages.$inferSelect,
   allStages: Array<typeof pipelineStages.$inferSelect>,
-  currentIdx: number,
+  _currentIdx: number,
 ): Omit<PipelineAction, "pipelineRunId"> {
+  const groups = groupStagesByOrder(allStages);
+  const currentGroupIdx = groups.findIndex((g) => g.some((s) => s.id === currentStage.id));
+  // On rejection, clear completedStageIds for the target group so it restarts cleanly
+  const clearedStateJson = { ...(run.stateJson ?? {}), completedStageIds: [] } as Record<string, unknown>;
+
   switch (currentStage.onReject) {
     case "previous": {
-      if (currentIdx <= 0) {
-        // No previous stage — treat as stop
+      if (currentGroupIdx <= 0) {
         return {
           overrideStatus: "blocked",
-          runPatch: { status: "failed", stageEnteredAt: null, updatedAt: new Date() },
+          runPatch: { status: "failed", stageEnteredAt: null, stateJson: clearedStateJson, updatedAt: new Date() },
         };
       }
-      const prevStage = allStages[currentIdx - 1];
+      const prevGroup = groups[currentGroupIdx - 1];
+      const prevStage = prevGroup[0];
       return {
         overrideStatus: defaultStatusForStageType(prevStage.stageType),
         overrideAssigneeAgentId: prevStage.agentId ?? null,
-        runPatch: { currentStageId: prevStage.id, stageEnteredAt: new Date(), updatedAt: new Date() },
+        runPatch: { currentStageId: prevStage.id, stageEnteredAt: new Date(), stateJson: clearedStateJson, updatedAt: new Date() },
       };
     }
 
     case "restart": {
-      const firstStage = allStages[0];
+      const firstStage = groups[0][0];
       return {
         overrideStatus: defaultStatusForStageType(firstStage.stageType),
         overrideAssigneeAgentId: firstStage.agentId ?? null,
-        runPatch: { currentStageId: firstStage.id, stageEnteredAt: new Date(), updatedAt: new Date() },
+        runPatch: { currentStageId: firstStage.id, stageEnteredAt: new Date(), stateJson: clearedStateJson, updatedAt: new Date() },
       };
     }
 

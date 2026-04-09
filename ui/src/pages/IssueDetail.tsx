@@ -1439,6 +1439,7 @@ export function IssueDetail() {
 
       {issue.projectId && (
         <IssuePipelineProgress
+          issueId={issue.id}
           projectId={issue.projectId}
           executionState={issue.executionState}
         />

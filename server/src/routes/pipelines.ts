@@ -1,5 +1,7 @@
 import { Router } from "express";
+import { and, asc, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
+import { issues, issueComments, pipelineRuns, pipelineStages } from "@paperclipai/db";
 import {
   createPipelineSchema,
   updatePipelineSchema,
@@ -8,7 +10,8 @@ import {
 } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import { pipelineService, projectService, logActivity } from "../services/index.js";
-import { assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
+import { conflict, notFound, unprocessable } from "../errors.js";
 
 export function pipelineRoutes(db: Db) {
   const router = Router();
@@ -280,6 +283,217 @@ export function pipelineRoutes(db: Db) {
     });
 
     res.json(stage);
+  });
+
+  // --- Pipeline run for issue ---
+
+  router.get("/issues/:issueId/pipeline-run", async (req, res) => {
+    const issueId = req.params.issueId as string;
+    const [issue] = await db
+      .select({ companyId: issues.companyId })
+      .from(issues)
+      .where(eq(issues.id, issueId));
+    if (!issue) {
+      res.status(404).json({ error: "Issue not found" });
+      return;
+    }
+    assertCompanyAccess(req, issue.companyId);
+
+    const [run] = await db
+      .select()
+      .from(pipelineRuns)
+      .where(and(eq(pipelineRuns.issueId, issueId), eq(pipelineRuns.status, "running")));
+
+    if (!run) {
+      res.status(404).json({ error: "No running pipeline run for this issue" });
+      return;
+    }
+    res.json(run);
+  });
+
+  // --- Skip stage (board override) ---
+
+  router.post("/pipeline-runs/:id/skip-stage", async (req, res) => {
+    assertBoard(req);
+
+    const runId = req.params.id as string;
+    const { reason } = req.body as { reason?: string };
+    if (!reason || typeof reason !== "string" || reason.trim().length === 0) {
+      throw unprocessable("A reason is required to skip a stage");
+    }
+
+    const result = await db.transaction(async (tx) => {
+      // 1. Load the pipeline run
+      const [run] = await tx
+        .select()
+        .from(pipelineRuns)
+        .where(and(eq(pipelineRuns.id, runId), eq(pipelineRuns.status, "running")));
+      if (!run) throw notFound("Running pipeline run not found");
+
+      if (!run.currentStageId) throw conflict("Pipeline run has no current stage");
+
+      // 2. Load the current stage
+      const [currentStage] = await tx
+        .select()
+        .from(pipelineStages)
+        .where(eq(pipelineStages.id, run.currentStageId));
+      if (!currentStage) throw notFound("Current pipeline stage not found");
+
+      // 3. Cannot skip approval stages
+      if (currentStage.stageType === "approval") {
+        throw conflict("Cannot skip approval stages");
+      }
+
+      // 4. Get all stages in order
+      const allStages = await tx
+        .select()
+        .from(pipelineStages)
+        .where(eq(pipelineStages.pipelineId, run.pipelineId))
+        .orderBy(asc(pipelineStages.stageOrder));
+
+      const actor = getActorInfo(req);
+      const now = new Date();
+      const skipEntry = {
+        action: "stage_skipped",
+        stageId: currentStage.id,
+        stageName: currentStage.name,
+        stageType: currentStage.stageType,
+        reason: reason.trim(),
+        skippedBy: actor.actorId,
+        skippedAt: now.toISOString(),
+      };
+
+      // Append skip event and mark stage completed in stateJson
+      const existingState = (run.stateJson ?? {}) as Record<string, unknown>;
+      const skipLog = Array.isArray(existingState.skipLog) ? [...existingState.skipLog] : [];
+      skipLog.push(skipEntry);
+      const prevCompleted: string[] = Array.isArray(existingState.completedStageIds)
+        ? existingState.completedStageIds as string[]
+        : [];
+      const completedStageIds = [...new Set([...prevCompleted, currentStage.id])];
+      const newStateJson = { ...existingState, skipLog, completedStageIds };
+
+      // 5. Group stages by stageOrder for parallel support
+      const groupMap = new Map<number, typeof allStages>();
+      for (const s of allStages) {
+        let g = groupMap.get(s.stageOrder);
+        if (!g) { g = []; groupMap.set(s.stageOrder, g); }
+        g.push(s);
+      }
+      const groups = [...groupMap.entries()].sort(([a], [b]) => a - b).map(([, g]) => g);
+      const currentGroupIdx = groups.findIndex((g) => g.some((s) => s.id === currentStage.id));
+      const currentGroup = groups[currentGroupIdx];
+
+      // Check if all stages in the parallel group are now done
+      const completedSet = new Set(completedStageIds);
+      const allGroupDone = currentGroup.every((s) => completedSet.has(s.id));
+      const isComplete = allGroupDone && currentGroupIdx >= groups.length - 1;
+
+      let advancedToName: string | null = null;
+
+      if (isComplete) {
+        // Last group — pipeline completes
+        await tx
+          .update(pipelineRuns)
+          .set({ status: "completed", stateJson: newStateJson, updatedAt: now })
+          .where(eq(pipelineRuns.id, run.id));
+
+        if (run.issueId) {
+          await tx
+            .update(issues)
+            .set({ status: "done", completedAt: now, updatedAt: now })
+            .where(eq(issues.id, run.issueId));
+        }
+      } else {
+        // Next stage: next unfinished in group, or first in next group
+        let nextStage: typeof allStages[number];
+        if (!allGroupDone) {
+          nextStage = currentGroup.find((s) => !completedSet.has(s.id))!;
+        } else {
+          nextStage = groups[currentGroupIdx + 1][0];
+        }
+        advancedToName = nextStage.name;
+
+        const nextStatus = nextStage.stageType === "review" || nextStage.stageType === "approval"
+          ? "in_review"
+          : "todo";
+
+        await tx
+          .update(pipelineRuns)
+          .set({ currentStageId: nextStage.id, stateJson: newStateJson, updatedAt: now })
+          .where(eq(pipelineRuns.id, run.id));
+
+        if (run.issueId) {
+          const issuePatch: Record<string, unknown> = { status: nextStatus, updatedAt: now };
+          if (nextStage.agentId) {
+            issuePatch.assigneeAgentId = nextStage.agentId;
+          }
+          await tx
+            .update(issues)
+            .set(issuePatch)
+            .where(eq(issues.id, run.issueId));
+        }
+      }
+
+      // 6. Post issue comment
+      if (run.issueId) {
+        const issueRow = await tx
+          .select({ companyId: issues.companyId })
+          .from(issues)
+          .where(eq(issues.id, run.issueId))
+          .then((rows) => rows[0]);
+
+        if (issueRow) {
+          const commentBody = isComplete
+            ? `**Stage skipped (board override):** "${currentStage.name}" was skipped. Pipeline completed.\n\n**Reason:** ${reason.trim()}`
+            : `**Stage skipped (board override):** "${currentStage.name}" was skipped. Advanced to "${advancedToName}".\n\n**Reason:** ${reason.trim()}`;
+
+          await tx.insert(issueComments).values({
+            companyId: issueRow.companyId,
+            issueId: run.issueId,
+            authorUserId: actor.actorId,
+            body: commentBody,
+          });
+
+          await tx
+            .update(issues)
+            .set({ updatedAt: now })
+            .where(eq(issues.id, run.issueId));
+        }
+      }
+
+      // 7. Log activity
+      if (run.issueId) {
+        const issueRow = await tx
+          .select({ companyId: issues.companyId })
+          .from(issues)
+          .where(eq(issues.id, run.issueId))
+          .then((rows) => rows[0]);
+
+        if (issueRow) {
+          await logActivity(db, {
+            companyId: issueRow.companyId,
+            actorType: actor.actorType,
+            actorId: actor.actorId,
+            agentId: actor.agentId,
+            action: "pipeline_stage.skipped",
+            entityType: "pipeline_run",
+            entityId: run.id,
+            details: skipEntry,
+          });
+        }
+      }
+
+      // Return the updated run
+      const [updatedRun] = await tx
+        .select()
+        .from(pipelineRuns)
+        .where(eq(pipelineRuns.id, run.id));
+
+      return updatedRun;
+    });
+
+    res.json(result);
   });
 
   return router;
