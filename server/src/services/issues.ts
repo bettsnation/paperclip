@@ -113,6 +113,8 @@ interface PipelineAction {
     payload: Record<string, unknown>;
     requestedByAgentId?: string | null;
   };
+  /** Current stateJson from the pipeline run (for heartbeat context). */
+  currentStateJson?: Record<string, unknown> | null;
 }
 
 /**
@@ -127,6 +129,7 @@ async function evaluatePipelineTransition(
   tx: any,
   existing: typeof issues.$inferSelect,
   newStatus: string,
+  pipelineState?: Record<string, unknown>,
 ): Promise<PipelineAction | null> {
   // 1. Find an active pipeline run for this issue
   const run = await tx
@@ -160,8 +163,17 @@ async function evaluatePipelineTransition(
     (currentStage.stageType === "review" || currentStage.stageType === "approval") &&
     STAGE_REJECT_STATUSES.has(newStatus);
 
+  // Merge caller-supplied pipelineState into the run's stateJson
+  const mergedStateJson = pipelineState
+    ? { ...(run.stateJson ?? {}), ...pipelineState }
+    : run.stateJson ?? {};
+
   if (!isCompletion && !isRejection) {
-    return { pipelineRunId: run.id, runPatch: {} };
+    // Even without a stage transition, persist any pipelineState the agent sent
+    const runPatch: Partial<typeof pipelineRuns.$inferInsert> = pipelineState
+      ? { stateJson: mergedStateJson, updatedAt: new Date() }
+      : {};
+    return { pipelineRunId: run.id, runPatch, currentStateJson: mergedStateJson };
   }
 
   // Fetch all stages in order for advancement / regression
@@ -175,11 +187,17 @@ async function evaluatePipelineTransition(
 
   // ---------- COMPLETION ----------
   if (isCompletion) {
-    return { pipelineRunId: run.id, ...resolveCompletion(existing, run, currentStage, allStages, currentIdx) };
+    const result = resolveCompletion(existing, run, currentStage, allStages, currentIdx);
+    // Persist merged state on completion
+    result.runPatch.stateJson = mergedStateJson;
+    return { pipelineRunId: run.id, ...result, currentStateJson: mergedStateJson };
   }
 
   // ---------- REJECTION ----------
-  return { pipelineRunId: run.id, ...resolveRejection(existing, run, currentStage, allStages, currentIdx) };
+  const result = resolveRejection(existing, run, currentStage, allStages, currentIdx);
+  // Persist merged state on rejection too
+  result.runPatch.stateJson = mergedStateJson;
+  return { pipelineRunId: run.id, ...result, currentStateJson: mergedStateJson };
 }
 
 function resolveCompletion(
@@ -1848,6 +1866,7 @@ export function issueService(db: Db) {
         blockedByIssueIds?: string[];
         actorAgentId?: string | null;
         actorUserId?: string | null;
+        pipelineState?: Record<string, unknown>;
       },
       dbOrTx: any = db,
       opts?: {
@@ -1867,6 +1886,7 @@ export function issueService(db: Db) {
         blockedByIssueIds,
         actorAgentId,
         actorUserId,
+        pipelineState: callerPipelineState,
         ...issueData
       } = data;
       const isolatedWorkspacesEnabled = (await instanceSettings.getExperimental()).enableIsolatedWorkspaces;
@@ -1943,7 +1963,7 @@ export function issueService(db: Db) {
         // --- Pipeline enforcement (inside tx for consistency) ---
         let pipelineAction: PipelineAction | null = null;
         if (issueData.status && issueData.status !== existing.status) {
-          pipelineAction = await evaluatePipelineTransition(tx, existing, issueData.status);
+          pipelineAction = await evaluatePipelineTransition(tx, existing, issueData.status, callerPipelineState);
           if (pipelineAction) {
             if (pipelineAction.overrideStatus) {
               patch.status = pipelineAction.overrideStatus;
@@ -1975,6 +1995,20 @@ export function issueService(db: Db) {
                 });
               }
             }
+          }
+        } else if (callerPipelineState) {
+          // Merge pipelineState into the active run even without a status change
+          const run = await tx
+            .select()
+            .from(pipelineRuns)
+            .where(and(eq(pipelineRuns.issueId, existing.id), eq(pipelineRuns.status, "running")))
+            .then((rows: Array<typeof pipelineRuns.$inferSelect>) => rows[0] ?? null);
+          if (run) {
+            const merged = { ...(run.stateJson ?? {}), ...callerPipelineState };
+            await tx
+              .update(pipelineRuns)
+              .set({ stateJson: merged, updatedAt: new Date() })
+              .where(eq(pipelineRuns.id, run.id));
           }
         }
 
