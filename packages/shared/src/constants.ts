@@ -116,6 +116,7 @@ export const ISSUE_STATUSES = [
   "done",
   "blocked",
   "cancelled",
+  "changes_requested",
 ] as const;
 export type IssueStatus = (typeof ISSUE_STATUSES)[number];
 
