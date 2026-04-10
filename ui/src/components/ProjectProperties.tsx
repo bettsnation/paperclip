@@ -758,6 +758,33 @@ export function ProjectProperties({ project, onUpdate, onFieldUpdate, getFieldSa
               </div>
             </div>
 
+            {primaryCodebaseWorkspace && codebase.repoUrl && (
+              <div className="space-y-1">
+                <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Default branch</div>
+                <div className="flex items-center gap-2">
+                  <input
+                    className="w-full rounded border border-border bg-transparent px-2 py-1 text-xs font-mono outline-none focus:ring-1 focus:ring-ring"
+                    defaultValue={primaryCodebaseWorkspace.defaultRef ?? ""}
+                    placeholder="auto-detect"
+                    onBlur={(e) => {
+                      const val = e.target.value.trim() || null;
+                      if (val !== (primaryCodebaseWorkspace.defaultRef ?? null)) {
+                        updateWorkspace.mutate({
+                          workspaceId: primaryCodebaseWorkspace.id,
+                          data: { defaultRef: val },
+                        });
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        (e.target as HTMLInputElement).blur();
+                      }
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+
             {hasAdditionalLegacyWorkspaces && (
               <div className="text-[11px] text-muted-foreground">
                 Additional legacy workspace records exist on this project. Paperclip is using the primary workspace as the codebase view.
