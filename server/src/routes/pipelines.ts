@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { approvals, issues, issueApprovals, issueComments, pipelineRuns, pipelineStages } from "@paperclipai/db";
 import {
@@ -381,6 +381,49 @@ export function pipelineRoutes(db: Db) {
       return;
     }
     res.json(run);
+  });
+
+  // --- Pipeline runs for issue (all runs, not just running) ---
+
+  router.get("/issues/:issueId/pipeline-runs", async (req, res) => {
+    const issueId = req.params.issueId as string;
+    const [issue] = await db
+      .select({ companyId: issues.companyId })
+      .from(issues)
+      .where(eq(issues.id, issueId));
+    if (!issue) {
+      res.status(404).json({ error: "Issue not found" });
+      return;
+    }
+    assertCompanyAccess(req, issue.companyId);
+
+    const runs = await db
+      .select()
+      .from(pipelineRuns)
+      .where(eq(pipelineRuns.issueId, issueId))
+      .orderBy(asc(pipelineRuns.createdAt));
+
+    res.json(runs);
+  });
+
+  // --- Pipeline runs for a pipeline (all issues) ---
+
+  router.get("/pipelines/:pipelineId/runs", async (req, res) => {
+    const pipelineId = req.params.pipelineId as string;
+    const pipeline = await svc.getById(pipelineId);
+    if (!pipeline) {
+      res.status(404).json({ error: "Pipeline not found" });
+      return;
+    }
+    assertCompanyAccess(req, pipeline.companyId);
+
+    const runs = await db
+      .select()
+      .from(pipelineRuns)
+      .where(eq(pipelineRuns.pipelineId, pipelineId))
+      .orderBy(desc(pipelineRuns.createdAt));
+
+    res.json(runs);
   });
 
   // --- Skip stage (board override) ---

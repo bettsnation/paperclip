@@ -34,6 +34,10 @@ export const pipelinesApi = {
   // Pipeline runs
   getIssuePipelineRun: (issueId: string) =>
     api.get<PipelineRun>(`/issues/${issueId}/pipeline-run`),
+  getIssuePipelineRuns: (issueId: string) =>
+    api.get<PipelineRun[]>(`/issues/${issueId}/pipeline-runs`),
+  getPipelineRuns: (pipelineId: string) =>
+    api.get<PipelineRun[]>(`/pipelines/${pipelineId}/runs`),
   skipStage: (runId: string, reason: string) =>
     api.post<PipelineRun>(`/pipeline-runs/${runId}/skip-stage`, { reason }),
 };

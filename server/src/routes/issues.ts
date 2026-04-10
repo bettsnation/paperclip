@@ -1276,6 +1276,10 @@ export function issueRoutes(
     const onPipelineReassignment = (info: { id: string; assigneeAgentId: string; status: string }) => {
       pipelineReassignedAgent = info;
     };
+    const pipelineChildIssues: Array<{ id: string; assigneeAgentId: string | null; status: string }> = [];
+    const onChildIssueCreated = (child: { id: string; assigneeAgentId: string | null; status: string }) => {
+      pipelineChildIssues.push(child);
+    };
     try {
       if (transition.decision && decisionId) {
         const decision = transition.decision;
@@ -1289,7 +1293,7 @@ export function issueRoutes(
               ...(pipelineState ? { pipelineState } : {}),
             },
             tx,
-            { onPipelineReassignment },
+            { onPipelineReassignment, onChildIssueCreated },
           );
           if (!updated) return null;
 
@@ -1314,7 +1318,7 @@ export function issueRoutes(
           actorAgentId: actor.agentId ?? null,
           actorUserId: actor.actorType === "user" ? actor.actorId : null,
           ...(pipelineState ? { pipelineState } : {}),
-        }, undefined, { onPipelineReassignment });
+        }, undefined, { onPipelineReassignment, onChildIssueCreated });
       }
     } catch (err) {
       if (err instanceof HttpError && err.status === 422) {
@@ -1530,6 +1534,21 @@ export function issueRoutes(
             ...(activeRun?.stateJson ? { pipelineState: activeRun.stateJson } : {}),
           },
         });
+      }
+
+      // Wake agents assigned to sub-pipeline child issues
+      for (const child of pipelineChildIssues) {
+        if (child.assigneeAgentId) {
+          addWakeup(child.assigneeAgentId, {
+            source: "assignment",
+            triggerDetail: "system",
+            reason: "issue_assigned",
+            payload: { issueId: child.id, mutation: "sub_pipeline_create" },
+            requestedByActorType: actor.actorType,
+            requestedByActorId: actor.actorId,
+            contextSnapshot: { issueId: child.id, source: "pipeline.sub_pipeline_child_created" },
+          });
+        }
       }
 
       if (!assigneeChanged && statusChangedFromBacklog && issue.assigneeAgentId) {

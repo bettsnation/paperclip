@@ -57,22 +57,34 @@ export function IssuePipelineProgress({ issueId, projectId, executionState }: Is
   const [skipReason, setSkipReason] = useState("");
   const [showSkipDialog, setShowSkipDialog] = useState(false);
 
-  const { data: pipeline } = useQuery({
+  // Fetch the active pipeline run first — its pipelineId is the source of truth
+  // (sub-pipeline child issues run on a different pipeline than the project's).
+  const { data: pipelineRun } = useQuery({
+    queryKey: queryKeys.pipelines.issuePipelineRun(issueId),
+    queryFn: () => pipelinesApi.getIssuePipelineRun(issueId).catch(() => null),
+    enabled: !!issueId,
+  });
+
+  const runPipelineId = pipelineRun?.pipelineId ?? null;
+
+  const { data: pipelineFromRun } = useQuery({
+    queryKey: queryKeys.pipelines.detail(runPipelineId!),
+    queryFn: () => pipelinesApi.get(runPipelineId!),
+    enabled: !!runPipelineId,
+  });
+
+  const { data: pipelineFromProject } = useQuery({
     queryKey: queryKeys.pipelines.projectPipeline(projectId!),
     queryFn: () => pipelinesApi.getProjectPipeline(projectId!).catch(() => null),
-    enabled: !!projectId,
+    enabled: !!projectId && !runPipelineId,
   });
+
+  const pipeline = pipelineFromRun ?? pipelineFromProject ?? null;
 
   const { data: stages } = useQuery({
     queryKey: queryKeys.pipelines.stages(pipeline?.id ?? ""),
     queryFn: () => pipelinesApi.listStages(pipeline!.id),
     enabled: !!pipeline?.id,
-  });
-
-  const { data: pipelineRun } = useQuery({
-    queryKey: queryKeys.pipelines.issuePipelineRun(issueId),
-    queryFn: () => pipelinesApi.getIssuePipelineRun(issueId).catch(() => null),
-    enabled: !!issueId,
   });
 
   const skipMutation = useMutation({

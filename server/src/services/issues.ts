@@ -41,7 +41,7 @@ import { redactCurrentUserText } from "../log-redaction.js";
 import { resolveIssueGoalId, resolveNextIssueGoalId } from "./issue-goal-fallback.js";
 import { getDefaultCompanyGoal } from "./goals.js";
 
-const ALL_ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocked", "done", "cancelled"];
+const ALL_ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocked", "done", "cancelled", "changes_requested"];
 const MAX_ISSUE_COMMENT_PAGE_LIMIT = 500;
 
 function assertTransition(from: string, to: string) {
@@ -76,8 +76,8 @@ function applyStatusSideEffects(
 /** Which issue statuses are valid per pipeline stage type. */
 const STAGE_ALLOWED_STATUSES: Record<string, readonly string[]> = {
   action:       ["todo", "in_progress", "blocked", "done", "cancelled"],
-  review:       ["in_review", "in_progress", "blocked", "done", "cancelled"],
-  approval:     ["in_review", "in_progress", "blocked", "done", "cancelled"],
+  review:       ["in_review", "in_progress", "blocked", "done", "cancelled", "changes_requested"],
+  approval:     ["in_review", "in_progress", "blocked", "done", "cancelled", "changes_requested"],
   sub_pipeline: ["todo", "in_progress", "blocked", "cancelled"],
 };
 
@@ -85,10 +85,11 @@ const STAGE_ALLOWED_STATUSES: Record<string, readonly string[]> = {
 const STAGE_COMPLETE_STATUS = "done";
 
 /** Statuses that trigger a rejection for review/approval stages. */
-const STAGE_REJECT_STATUSES = new Set(["in_progress"]);
+const STAGE_REJECT_STATUSES = new Set(["changes_requested"]);
 
-/** The default issue status when entering a stage of a given type. */
-function defaultStatusForStageType(stageType: string): string {
+/** The default issue status when entering a stage of a given type.
+ *  Non-first action stages use `in_progress` to avoid a `done` → `todo` regression. */
+function defaultStatusForStageType(stageType: string, isFirstStage = true): string {
   switch (stageType) {
     case "review":
     case "approval":
@@ -96,7 +97,7 @@ function defaultStatusForStageType(stageType: string): string {
     case "sub_pipeline":
       return "in_progress";
     default:
-      return "todo";
+      return isFirstStage ? "todo" : "in_progress";
   }
 }
 
@@ -261,7 +262,7 @@ function buildAdvanceAction(
   nextStage: typeof pipelineStages.$inferSelect,
   newStateJson: Record<string, unknown>,
 ): Omit<PipelineAction, "pipelineRunId"> {
-  const nextStatus = defaultStatusForStageType(nextStage.stageType);
+  const nextStatus = defaultStatusForStageType(nextStage.stageType, false);
   const action: Omit<PipelineAction, "pipelineRunId"> = {
     overrideStatus: nextStatus,
     overrideAssigneeAgentId: nextStage.agentId ?? null,
@@ -368,7 +369,7 @@ function resolveRejection(
       const prevGroup = groups[currentGroupIdx - 1];
       const prevStage = prevGroup[0];
       return {
-        overrideStatus: defaultStatusForStageType(prevStage.stageType),
+        overrideStatus: defaultStatusForStageType(prevStage.stageType, false),
         overrideAssigneeAgentId: prevStage.agentId ?? null,
         runPatch: { currentStageId: prevStage.id, stageEnteredAt: new Date(), stateJson: clearedStateJson, updatedAt: new Date() },
       };
@@ -377,7 +378,7 @@ function resolveRejection(
     case "restart": {
       const firstStage = groups[0][0];
       return {
-        overrideStatus: defaultStatusForStageType(firstStage.stageType),
+        overrideStatus: defaultStatusForStageType(firstStage.stageType, true),
         overrideAssigneeAgentId: firstStage.agentId ?? null,
         runPatch: { currentStageId: firstStage.id, stageEnteredAt: new Date(), stateJson: clearedStateJson, updatedAt: new Date() },
       };
@@ -395,12 +396,17 @@ function resolveRejection(
  * Apply the pipeline side-effects inside the transaction after the issue
  * has been updated.
  */
+interface PipelineActionResult {
+  createdChildIssues: Array<{ id: string; assigneeAgentId: string | null; status: string }>;
+}
+
 async function applyPipelineAction(
   tx: any,
   issueId: string,
   run: { id: string },
   action: PipelineAction,
-) {
+): Promise<PipelineActionResult> {
+  const result: PipelineActionResult = { createdChildIssues: [] };
   // Update pipeline run
   if (Object.keys(action.runPatch).length > 0) {
     await tx
@@ -457,6 +463,22 @@ async function applyPipelineAction(
       const issueNumber = company.issueCounter;
       const identifier = `${company.issuePrefix}-${issueNumber}`;
 
+      // Fetch parent issue details and pipeline name for the child description
+      const [parentIssue] = await tx
+        .select({ identifier: issues.identifier, title: issues.title })
+        .from(issues)
+        .where(eq(issues.id, issueId));
+      const [subPipeline] = await tx
+        .select({ name: pipelines.name })
+        .from(pipelines)
+        .where(eq(pipelines.id, action.createSubPipelineRun.pipelineId));
+
+      const childDescription = [
+        `**Parent issue:** ${parentIssue?.identifier ?? issueId} — ${parentIssue?.title ?? ""}`,
+        `**Pipeline:** ${subPipeline?.name ?? action.createSubPipelineRun.pipelineId}`,
+        `**Stage:** ${stageName}`,
+      ].join("\n\n");
+
       // Create child issue
       const [childIssue] = await tx
         .insert(issues)
@@ -465,6 +487,7 @@ async function applyPipelineAction(
           projectId,
           parentId: issueId,
           title: `Sub-pipeline: ${stageName}`,
+          description: childDescription,
           status: "in_progress",
           startedAt: new Date(),
           issueNumber,
@@ -490,6 +513,13 @@ async function applyPipelineAction(
         status: "running",
         stageEnteredAt: new Date(),
       });
+
+      // Track for post-transaction wakeup
+      result.createdChildIssues.push({
+        id: childIssue.id,
+        assigneeAgentId: firstSubStage.agentId ?? null,
+        status: childIssue.status,
+      });
     }
   }
 
@@ -505,6 +535,8 @@ async function applyPipelineAction(
       await advanceParentOnChildCompletion(tx, completedRun);
     }
   }
+
+  return result;
 }
 
 /**
@@ -2123,6 +2155,8 @@ export function issueService(db: Db) {
       opts?: {
         /** Called after a pipeline stage transition reassigns the issue to a new agent. Workaround for routing bug #2730. */
         onPipelineReassignment?: (issue: { id: string; assigneeAgentId: string; status: string }) => void;
+        /** Called when a sub-pipeline stage creates a child issue that needs a wakeup. */
+        onChildIssueCreated?: (child: { id: string; assigneeAgentId: string | null; status: string }) => void;
       },
     ) => {
       const existing = await dbOrTx
@@ -2306,7 +2340,10 @@ export function issueService(db: Db) {
 
         // --- Apply pipeline side-effects after issue update ---
         if (pipelineAction) {
-          await applyPipelineAction(tx, updated.id, { id: pipelineAction.pipelineRunId }, pipelineAction);
+          const pipelineResult = await applyPipelineAction(tx, updated.id, { id: pipelineAction.pipelineRunId }, pipelineAction);
+          for (const child of pipelineResult.createdChildIssues) {
+            opts?.onChildIssueCreated?.(child);
+          }
         }
 
         const [enriched] = await withIssueLabels(tx, [updated]);

@@ -43,6 +43,7 @@ import { InlineEditor } from "../components/InlineEditor";
 import { IssueChatThread } from "../components/IssueChatThread";
 import { IssueDocumentsSection } from "../components/IssueDocumentsSection";
 import { IssuePipelineProgress } from "../components/IssuePipelineProgress";
+import { PipelineRunHistory } from "../components/PipelineRunHistory";
 import { IssueProperties } from "../components/IssueProperties";
 import { IssueWorkspaceCard } from "../components/IssueWorkspaceCard";
 import type { MentionOption } from "../components/MarkdownEditor";
@@ -1444,6 +1445,8 @@ export function IssueDetail() {
           executionState={issue.executionState}
         />
       )}
+
+      <PipelineRunHistory issueId={issue.id} />
 
       <PluginSlotOutlet
         slotTypes={["toolbarButton", "contextMenuItem"]}
