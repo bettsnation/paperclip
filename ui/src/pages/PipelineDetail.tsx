@@ -18,16 +18,23 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import {
   ArrowRight,
+  Check,
+  Circle,
   Clock,
   GripVertical,
   Layers,
+  Loader2,
   Pencil,
+  Play,
   Plus,
   Trash2,
+  XCircle,
 } from "lucide-react";
 import { pipelinesApi } from "../api/pipelines";
 import { agentsApi } from "../api/agents";
 import { projectsApi } from "../api/projects";
+import { Link } from "@/lib/router";
+import { relativeTime } from "../lib/utils";
 import { useCompany } from "../context/CompanyContext";
 import { usePanel } from "../context/PanelContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
@@ -45,7 +52,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { Agent, PipelineStage } from "@paperclipai/shared";
+import type { Agent, PipelineRun, PipelineStage } from "@paperclipai/shared";
 
 const STAGE_TYPES = ["action", "review", "approval", "sub_pipeline"] as const;
 const ON_COMPLETE_OPTIONS = ["next", "done"] as const;
@@ -417,6 +424,148 @@ function PipelineProperties({
   );
 }
 
+const runStatusConfig: Record<string, { icon: typeof Check; color: string; label: string }> = {
+  running: { icon: Loader2, color: "text-cyan-600 dark:text-cyan-400", label: "Running" },
+  completed: { icon: Check, color: "text-emerald-600 dark:text-emerald-400", label: "Completed" },
+  failed: { icon: XCircle, color: "text-red-600 dark:text-red-400", label: "Failed" },
+};
+
+function formatRunDuration(start: Date | string, end: Date | string): string {
+  const ms = new Date(end).getTime() - new Date(start).getTime();
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
+  const h = Math.floor(ms / 3_600_000);
+  const m = Math.round((ms % 3_600_000) / 60_000);
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
+}
+
+function PipelineRunsSection({ pipelineId, stages }: { pipelineId: string; stages: PipelineStage[] }) {
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+
+  const { data: runs, isLoading } = useQuery({
+    queryKey: queryKeys.pipelines.pipelineRuns(pipelineId),
+    queryFn: () => pipelinesApi.getPipelineRuns(pipelineId),
+    enabled: !!pipelineId,
+  });
+
+  const stageMap = new Map(stages.map((s) => [s.id, s]));
+
+  const filteredRuns = (runs ?? []).filter(
+    (r) => statusFilter === "all" || r.status === statusFilter,
+  );
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold flex items-center gap-2">
+          <Play className="h-4 w-4" />
+          Runs ({runs?.length ?? 0})
+        </h3>
+        <div className="flex items-center gap-1">
+          {["all", "running", "completed", "failed"].map((s) => (
+            <button
+              key={s}
+              onClick={() => setStatusFilter(s)}
+              className={`rounded px-2 py-0.5 text-xs transition-colors ${
+                statusFilter === s
+                  ? "bg-accent text-foreground font-medium"
+                  : "text-muted-foreground hover:text-foreground hover:bg-accent/50"
+              }`}
+            >
+              {s === "all" ? "All" : s.charAt(0).toUpperCase() + s.slice(1)}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {isLoading ? (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground py-4">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          Loading runs...
+        </div>
+      ) : filteredRuns.length === 0 ? (
+        <p className="text-sm text-muted-foreground py-4">
+          {runs?.length === 0 ? "No runs yet." : "No matching runs."}
+        </p>
+      ) : (
+        <div className="border border-border rounded-md overflow-hidden">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-border bg-muted/30">
+                <th className="text-left px-3 py-2 font-medium text-muted-foreground">Status</th>
+                <th className="text-left px-3 py-2 font-medium text-muted-foreground">Issue</th>
+                <th className="text-left px-3 py-2 font-medium text-muted-foreground">Current/Final Stage</th>
+                <th className="text-left px-3 py-2 font-medium text-muted-foreground">Duration</th>
+                <th className="text-left px-3 py-2 font-medium text-muted-foreground">Started</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredRuns.map((run) => {
+                const config = runStatusConfig[run.status] ?? runStatusConfig.running;
+                const Icon = config.icon;
+                const currentStage = run.currentStageId ? stageMap.get(run.currentStageId) : null;
+                const stateJson = (run.stateJson ?? {}) as Record<string, unknown>;
+                const completedCount = Array.isArray(stateJson.completedStageIds)
+                  ? (stateJson.completedStageIds as string[]).length
+                  : 0;
+                const duration =
+                  run.status !== "running" && run.createdAt && run.updatedAt
+                    ? formatRunDuration(run.createdAt, run.updatedAt)
+                    : null;
+
+                return (
+                  <tr key={run.id} className="border-b border-border last:border-0 hover:bg-accent/20 transition-colors">
+                    <td className="px-3 py-2">
+                      <div className="flex items-center gap-1.5">
+                        <Icon className={`h-3.5 w-3.5 ${config.color} ${run.status === "running" ? "animate-spin" : ""}`} />
+                        <span className={config.color}>{config.label}</span>
+                      </div>
+                    </td>
+                    <td className="px-3 py-2">
+                      {run.issueId ? (
+                        <Link
+                          to={`/issues/${run.issueId}`}
+                          className="text-primary hover:underline"
+                        >
+                          {run.issueId.slice(0, 8)}...
+                        </Link>
+                      ) : (
+                        <span className="text-muted-foreground">-</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2">
+                      <div className="flex items-center gap-1.5">
+                        {currentStage ? (
+                          <>
+                            <span className={`inline-block px-1.5 py-0.5 rounded border text-[10px] ${stageTypeColors[currentStage.stageType] ?? stageTypeColors.action}`}>
+                              {currentStage.stageType}
+                            </span>
+                            <span>{currentStage.name}</span>
+                          </>
+                        ) : (
+                          <span className="text-muted-foreground">
+                            {completedCount > 0 ? `${completedCount}/${stages.length} stages` : "-"}
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 text-muted-foreground">
+                      {duration ?? (run.status === "running" ? "In progress" : "-")}
+                    </td>
+                    <td className="px-3 py-2 text-muted-foreground">
+                      {relativeTime(run.createdAt)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function PipelineDetail() {
   const { pipelineId } = useParams<{ pipelineId: string }>();
   const { selectedCompanyId, setSelectedCompanyId } = useCompany();
@@ -681,6 +830,9 @@ export function PipelineDetail() {
           </DndContext>
         )}
       </div>
+
+      {/* Pipeline Runs */}
+      <PipelineRunsSection pipelineId={pipelineId!} stages={stages ?? []} />
 
       {/* Add Stage Dialog */}
       <Dialog open={showAddStage} onOpenChange={setShowAddStage}>

@@ -65,7 +65,21 @@ export function IssuePipelineProgress({ issueId, projectId, executionState }: Is
     enabled: !!issueId,
   });
 
-  const runPipelineId = pipelineRun?.pipelineId ?? null;
+  // Fall back to the most recent completed/failed run when no active run exists
+  const { data: allRuns } = useQuery({
+    queryKey: queryKeys.pipelines.issuePipelineRuns(issueId),
+    queryFn: () => pipelinesApi.getIssuePipelineRuns(issueId).catch(() => []),
+    enabled: !!issueId && !pipelineRun,
+  });
+
+  const completedRun = !pipelineRun && allRuns?.length
+    ? allRuns.find((r) => r.status === "completed") ?? allRuns.find((r) => r.status === "failed") ?? null
+    : null;
+
+  const effectiveRun = pipelineRun ?? completedRun;
+  const isCompletedView = !pipelineRun && !!completedRun;
+
+  const runPipelineId = effectiveRun?.pipelineId ?? null;
 
   const { data: pipelineFromRun } = useQuery({
     queryKey: queryKeys.pipelines.detail(runPipelineId!),
@@ -104,13 +118,13 @@ export function IssuePipelineProgress({ issueId, projectId, executionState }: Is
 
   // Completed stage IDs: merge execution state + pipeline run stateJson
   const runCompletedIds: string[] =
-    (pipelineRun?.stateJson as Record<string, unknown> | null)?.completedStageIds as string[] ?? [];
+    (effectiveRun?.stateJson as Record<string, unknown> | null)?.completedStageIds as string[] ?? [];
   const completedIds = new Set([
     ...(executionState?.completedStageIds ?? []),
     ...runCompletedIds,
   ]);
 
-  const currentStageId = pipelineRun?.currentStageId ?? executionState?.currentStageId ?? null;
+  const currentStageId = isCompletedView ? null : (effectiveRun?.currentStageId ?? executionState?.currentStageId ?? null);
   const currentStage = currentStageId ? sortedStages.find((s) => s.id === currentStageId) : null;
   const canSkip = pipelineRun && currentStage && currentStage.stageType !== "approval" && currentStage.stageType !== "sub_pipeline";
 
@@ -128,6 +142,11 @@ export function IssuePipelineProgress({ issueId, projectId, executionState }: Is
       <div className="flex items-center justify-between">
         <h4 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           Pipeline: {pipeline.name}
+          {isCompletedView && (
+            <span className="ml-2 text-emerald-600 dark:text-emerald-400 normal-case font-normal">
+              (completed)
+            </span>
+          )}
         </h4>
         <div className="flex items-center gap-2">
           {canSkip && !showSkipDialog && (

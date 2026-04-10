@@ -88,7 +88,7 @@ interface PipelineRunHistoryProps {
 }
 
 export function PipelineRunHistory({ issueId }: PipelineRunHistoryProps) {
-  const [open, setOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
 
   const { data: runs } = useQuery({
     queryKey: queryKeys.pipelines.issuePipelineRuns(issueId),
@@ -103,18 +103,35 @@ export function PipelineRunHistory({ issueId }: PipelineRunHistoryProps) {
   // Get stages for the first run's pipeline (they'll share the same pipeline in most cases)
   const pipelineId = historyRuns[0]?.pipelineId;
 
+  const completedCount = historyRuns.filter((r) => r.status === "completed").length;
+  const failedCount = historyRuns.filter((r) => r.status === "failed").length;
+
   return (
-    <div className="space-y-2">
+    <div className="rounded-md border border-border p-3 space-y-2">
       <button
-        onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+        onClick={() => setCollapsed((v) => !v)}
+        className="flex items-center gap-1.5 w-full text-left"
       >
-        <Clock className="h-3.5 w-3.5" />
-        <span>Pipeline History ({historyRuns.length} run{historyRuns.length !== 1 ? "s" : ""})</span>
-        {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+        <h4 className="text-xs font-medium uppercase tracking-wide text-muted-foreground flex-1">
+          Pipeline History ({historyRuns.length} run{historyRuns.length !== 1 ? "s" : ""})
+        </h4>
+        <span className="flex items-center gap-2 text-[10px] text-muted-foreground">
+          {completedCount > 0 && (
+            <span className="flex items-center gap-0.5 text-emerald-600 dark:text-emerald-400">
+              <Check className="h-3 w-3" /> {completedCount}
+            </span>
+          )}
+          {failedCount > 0 && (
+            <span className="flex items-center gap-0.5 text-red-600 dark:text-red-400">
+              <XCircle className="h-3 w-3" /> {failedCount}
+            </span>
+          )}
+        </span>
+        {collapsed ? <ChevronRight className="h-3 w-3 text-muted-foreground" /> : <ChevronDown className="h-3 w-3 text-muted-foreground" />}
       </button>
 
-      {open && (
+      {!collapsed && (
         <RunList runs={historyRuns} pipelineId={pipelineId} />
       )}
     </div>
