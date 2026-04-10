@@ -38,7 +38,7 @@ export function pipelineTimeoutService(db: Db) {
             isNotNull(pipelineStages.timeoutMinutes),
             lte(
               sql`${pipelineRuns.stageEnteredAt} + (${pipelineStages.timeoutMinutes} || ' minutes')::interval`,
-              now,
+              sql`${now.toISOString()}::timestamptz`,
             ),
           ),
         );
