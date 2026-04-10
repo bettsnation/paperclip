@@ -224,9 +224,10 @@ export function ProjectProperties({ project, onUpdate, onFieldUpdate, getFieldSa
   const queryClient = useQueryClient();
   const [goalOpen, setGoalOpen] = useState(false);
   const [executionWorkspaceAdvancedOpen, setExecutionWorkspaceAdvancedOpen] = useState(false);
-  const [workspaceMode, setWorkspaceMode] = useState<"local" | "repo" | null>(null);
+  const [workspaceMode, setWorkspaceMode] = useState<"local" | "repo" | "defaultRef" | null>(null);
   const [workspaceCwd, setWorkspaceCwd] = useState("");
   const [workspaceRepoUrl, setWorkspaceRepoUrl] = useState("");
+  const [workspaceDefaultRef, setWorkspaceDefaultRef] = useState("");
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
 
   const commitField = (field: ProjectConfigFieldKey, data: Record<string, unknown>) => {
@@ -304,13 +305,18 @@ export function ProjectProperties({ project, onUpdate, onFieldUpdate, getFieldSa
     }
   };
 
+  const resetWorkspaceForm = () => {
+    setWorkspaceCwd("");
+    setWorkspaceRepoUrl("");
+    setWorkspaceDefaultRef("");
+    setWorkspaceMode(null);
+    setWorkspaceError(null);
+  };
+
   const createWorkspace = useMutation({
     mutationFn: (data: Record<string, unknown>) => projectsApi.createWorkspace(project.id, data),
     onSuccess: () => {
-      setWorkspaceCwd("");
-      setWorkspaceRepoUrl("");
-      setWorkspaceMode(null);
-      setWorkspaceError(null);
+      resetWorkspaceForm();
       invalidateProject();
     },
   });
@@ -318,10 +324,7 @@ export function ProjectProperties({ project, onUpdate, onFieldUpdate, getFieldSa
   const removeWorkspace = useMutation({
     mutationFn: (workspaceId: string) => projectsApi.removeWorkspace(project.id, workspaceId),
     onSuccess: () => {
-      setWorkspaceCwd("");
-      setWorkspaceRepoUrl("");
-      setWorkspaceMode(null);
-      setWorkspaceError(null);
+      resetWorkspaceForm();
       invalidateProject();
     },
   });
@@ -329,10 +332,7 @@ export function ProjectProperties({ project, onUpdate, onFieldUpdate, getFieldSa
     mutationFn: ({ workspaceId, data }: { workspaceId: string; data: Record<string, unknown> }) =>
       projectsApi.updateWorkspace(project.id, workspaceId, data),
     onSuccess: () => {
-      setWorkspaceCwd("");
-      setWorkspaceRepoUrl("");
-      setWorkspaceMode(null);
-      setWorkspaceError(null);
+      resetWorkspaceForm();
       invalidateProject();
     },
   });
@@ -755,6 +755,67 @@ export function ProjectProperties({ project, onUpdate, onFieldUpdate, getFieldSa
                   ) : null}
                 </div>
               </div>
+            </div>
+
+            <div className="space-y-1">
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Default branch</div>
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0 truncate font-mono text-xs text-muted-foreground">
+                  {codebase.defaultRef || <span className="italic">auto-detect</span>}
+                </div>
+                {primaryCodebaseWorkspace && (
+                  <Button
+                    variant="outline"
+                    size="xs"
+                    className="h-6 px-2"
+                    onClick={() => {
+                      setWorkspaceMode("defaultRef");
+                      setWorkspaceDefaultRef(codebase.defaultRef ?? "");
+                      setWorkspaceError(null);
+                    }}
+                  >
+                    {codebase.defaultRef ? "Change branch" : "Set branch"}
+                  </Button>
+                )}
+              </div>
+              {workspaceMode === "defaultRef" && primaryCodebaseWorkspace && (
+                <div className="space-y-1.5 rounded-md border border-border p-2">
+                  <input
+                    className="w-full rounded border border-border bg-transparent px-2 py-1 text-xs font-mono outline-none"
+                    value={workspaceDefaultRef}
+                    onChange={(e) => setWorkspaceDefaultRef(e.target.value)}
+                    placeholder="main"
+                  />
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      className="h-6 px-2"
+                      disabled={updateWorkspace.isPending}
+                      onClick={() => {
+                        updateWorkspace.mutate({
+                          workspaceId: primaryCodebaseWorkspace.id,
+                          data: { defaultRef: workspaceDefaultRef.trim() || null },
+                        });
+                      }}
+                    >
+                      Save
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      className="h-6 px-2"
+                      onClick={() => {
+                        setWorkspaceMode(null);
+                        setWorkspaceDefaultRef("");
+                        setWorkspaceError(null);
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
 
             {hasAdditionalLegacyWorkspaces && (
