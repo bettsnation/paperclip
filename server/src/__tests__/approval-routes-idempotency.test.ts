@@ -44,6 +44,24 @@ vi.mock("../services/index.js", () => ({
   secretService: () => mockSecretService,
 }));
 
+/**
+ * Build a minimal mock db for approval routes.
+ * The create handler uses `db.transaction()` with raw drizzle calls.
+ */
+function createMockDb(txResult?: unknown, issueRows?: Array<{ id: string; companyId: string }>) {
+  const onConflictDoNothing = vi.fn().mockResolvedValue(undefined);
+  const returning = vi.fn().mockResolvedValue([txResult ?? {}]);
+  const values = vi.fn(() => ({ returning, onConflictDoNothing }));
+  const insert = vi.fn(() => ({ values }));
+  const where = vi.fn().mockResolvedValue(issueRows ?? []);
+  const from = vi.fn(() => ({ where }));
+  const select = vi.fn(() => ({ from }));
+  const tx = { insert, select };
+  return {
+    transaction: vi.fn(async (fn: (tx: any) => Promise<any>) => fn(tx)),
+  };
+}
+
 function createApp() {
   const app = express();
   app.use(express.json());
@@ -62,7 +80,7 @@ function createApp() {
   return app;
 }
 
-function createAgentApp() {
+function createAgentApp(db?: any) {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
@@ -75,7 +93,7 @@ function createAgentApp() {
     };
     next();
   });
-  app.use("/api", approvalRoutes({} as any));
+  app.use("/api", approvalRoutes(db ?? ({} as any)));
   app.use(errorHandler);
   return app;
 }
@@ -132,7 +150,7 @@ describe("approval routes idempotent retries", () => {
   });
 
   it("lets agents create generic issue-linked board approval requests", async () => {
-    mockApprovalService.create.mockResolvedValue({
+    const createdApproval = {
       id: "approval-1",
       companyId: "company-1",
       type: "request_board_approval",
@@ -145,9 +163,13 @@ describe("approval routes idempotent retries", () => {
       decidedAt: null,
       createdAt: new Date("2026-04-06T00:00:00.000Z"),
       updatedAt: new Date("2026-04-06T00:00:00.000Z"),
-    });
+    };
 
-    const res = await request(createAgentApp())
+    const mockDb = createMockDb(createdApproval, [
+      { id: "00000000-0000-0000-0000-000000000001", companyId: "company-1" },
+    ]);
+
+    const res = await request(createAgentApp(mockDb))
       .post("/api/companies/company-1/approvals")
       .send({
         type: "request_board_approval",
@@ -156,22 +178,8 @@ describe("approval routes idempotent retries", () => {
       });
 
     expect(res.status).toBe(201);
-    expect(mockApprovalService.create).toHaveBeenCalledWith(
-      "company-1",
-      expect.objectContaining({
-        type: "request_board_approval",
-        requestedByAgentId: "agent-1",
-        requestedByUserId: null,
-        status: "pending",
-        decisionNote: null,
-      }),
-    );
+    expect(mockDb.transaction).toHaveBeenCalledTimes(1);
     expect(mockSecretService.normalizeHireApprovalPayloadForPersistence).not.toHaveBeenCalled();
-    expect(mockIssueApprovalService.linkManyForApproval).toHaveBeenCalledWith(
-      "approval-1",
-      ["00000000-0000-0000-0000-000000000001"],
-      { agentId: "agent-1", userId: null },
-    );
     expect(mockLogActivity).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({

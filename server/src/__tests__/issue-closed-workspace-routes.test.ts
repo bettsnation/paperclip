@@ -176,6 +176,8 @@ describe("closed isolated workspace issue routes", () => {
     expect(mockIssueService.update).toHaveBeenCalledWith(
       issueId,
       expect.objectContaining({ executionWorkspaceId: nextWorkspaceId }),
+      undefined,
+      expect.any(Object),
     );
   });
 });

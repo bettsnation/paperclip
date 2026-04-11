@@ -140,6 +140,8 @@ describe("issue comment reopen routes", () => {
         actorAgentId: null,
         actorUserId: "local-board",
       }),
+      undefined,
+      expect.any(Object),
     );
     expect(mockLogActivity).toHaveBeenCalledWith(
       expect.anything(),
@@ -170,6 +172,8 @@ describe("issue comment reopen routes", () => {
         actorAgentId: null,
         actorUserId: "local-board",
       }),
+      undefined,
+      expect.any(Object),
     );
     expect(mockLogActivity).toHaveBeenCalledWith(
       expect.anything(),
@@ -281,6 +285,7 @@ describe("issue comment reopen routes", () => {
         }),
       }),
       mockTx,
+      expect.any(Object),
     );
     const updatePatch = mockIssueService.update.mock.calls[0]?.[1] as Record<string, any>;
     const decisionId = updatePatch.executionState.lastDecisionId;
