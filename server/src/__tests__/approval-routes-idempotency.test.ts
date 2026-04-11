@@ -8,6 +8,7 @@ const mockApprovalService = vi.hoisted(() => ({
   list: vi.fn(),
   getById: vi.fn(),
   create: vi.fn(),
+  createWithIssueLinks: vi.fn(),
   approve: vi.fn(),
   reject: vi.fn(),
   requestRevision: vi.fn(),
@@ -25,6 +26,10 @@ const mockIssueApprovalService = vi.hoisted(() => ({
   linkManyForApproval: vi.fn(),
 }));
 
+const mockIssueService = vi.hoisted(() => ({
+  update: vi.fn(),
+}));
+
 const mockSecretService = vi.hoisted(() => ({
   normalizeHireApprovalPayloadForPersistence: vi.fn(),
 }));
@@ -35,6 +40,7 @@ vi.mock("../services/index.js", () => ({
   approvalService: () => mockApprovalService,
   heartbeatService: () => mockHeartbeatService,
   issueApprovalService: () => mockIssueApprovalService,
+  issueService: () => mockIssueService,
   logActivity: mockLogActivity,
   secretService: () => mockSecretService,
 }));
@@ -127,7 +133,7 @@ describe("approval routes idempotent retries", () => {
   });
 
   it("lets agents create generic issue-linked board approval requests", async () => {
-    mockApprovalService.create.mockResolvedValue({
+    const createdApproval = {
       id: "approval-1",
       companyId: "company-1",
       type: "request_board_approval",
@@ -140,7 +146,9 @@ describe("approval routes idempotent retries", () => {
       decidedAt: null,
       createdAt: new Date("2026-04-06T00:00:00.000Z"),
       updatedAt: new Date("2026-04-06T00:00:00.000Z"),
-    });
+    };
+
+    mockApprovalService.createWithIssueLinks.mockResolvedValue(createdApproval);
 
     const res = await request(createAgentApp())
       .post("/api/companies/company-1/approvals")
@@ -151,7 +159,7 @@ describe("approval routes idempotent retries", () => {
       });
 
     expect(res.status).toBe(201);
-    expect(mockApprovalService.create).toHaveBeenCalledWith(
+    expect(mockApprovalService.createWithIssueLinks).toHaveBeenCalledWith(
       "company-1",
       expect.objectContaining({
         type: "request_board_approval",
@@ -160,13 +168,10 @@ describe("approval routes idempotent retries", () => {
         status: "pending",
         decisionNote: null,
       }),
-    );
-    expect(mockSecretService.normalizeHireApprovalPayloadForPersistence).not.toHaveBeenCalled();
-    expect(mockIssueApprovalService.linkManyForApproval).toHaveBeenCalledWith(
-      "approval-1",
       ["00000000-0000-0000-0000-000000000001"],
       { agentId: "agent-1", userId: null },
     );
+    expect(mockSecretService.normalizeHireApprovalPayloadForPersistence).not.toHaveBeenCalled();
     expect(mockLogActivity).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({

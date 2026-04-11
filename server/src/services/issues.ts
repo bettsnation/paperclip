@@ -275,10 +275,11 @@ function buildAdvanceAction(
       type: "pipeline_stage_approval",
       payload: {
         title: `Approval required: ${nextStage.name}`,
-        summary: `Pipeline stage "${nextStage.name}" requires approval before the issue can proceed.`,
+        summary: `Pipeline stage "${nextStage.name}" requires approval before issue ${existing.identifier} can proceed.`,
         pipelineRunId: run.id,
         pipelineStageId: nextStage.id,
         issueId: existing.id,
+        issueIdentifier: existing.identifier,
       },
       requestedByAgentId: existing.assigneeAgentId,
     };
@@ -2343,6 +2344,40 @@ export function issueService(db: Db) {
           const pipelineResult = await applyPipelineAction(tx, updated.id, { id: pipelineAction.pipelineRunId }, pipelineAction);
           for (const child of pipelineResult.createdChildIssues) {
             opts?.onChildIssueCreated?.(child);
+          }
+        }
+
+        // --- Auto-reject orphaned pipeline approvals when issue is cancelled or done ---
+        const finalStatus = updated.status;
+        if (finalStatus === "cancelled" || finalStatus === "done") {
+          const pendingPipelineApprovals = await tx
+            .select({ approvalId: issueApprovals.approvalId })
+            .from(issueApprovals)
+            .innerJoin(approvals, eq(issueApprovals.approvalId, approvals.id))
+            .where(
+              and(
+                eq(issueApprovals.issueId, updated.id),
+                eq(approvals.type, "pipeline_stage_approval"),
+                eq(approvals.status, "pending"),
+              ),
+            );
+
+          if (pendingPipelineApprovals.length > 0) {
+            const now = new Date();
+            await tx
+              .update(approvals)
+              .set({
+                status: "rejected",
+                decisionNote: `Auto-rejected: issue ${updated.identifier} was ${finalStatus}`,
+                decidedAt: now,
+                updatedAt: now,
+              })
+              .where(
+                inArray(
+                  approvals.id,
+                  pendingPipelineApprovals.map((r: { approvalId: string }) => r.approvalId),
+                ),
+              );
           }
         }
 

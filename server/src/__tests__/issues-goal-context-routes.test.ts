@@ -69,6 +69,14 @@ vi.mock("../services/index.js", () => ({
   }),
 }));
 
+function createMockDb() {
+  const then = vi.fn((fn: (rows: any[]) => any) => fn([]));
+  const where = vi.fn(() => ({ then }));
+  const from = vi.fn(() => ({ where }));
+  const select = vi.fn(() => ({ from }));
+  return { select };
+}
+
 function createApp() {
   const app = express();
   app.use(express.json());
@@ -82,7 +90,7 @@ function createApp() {
     };
     next();
   });
-  app.use("/api", issueRoutes({} as any, {} as any));
+  app.use("/api", issueRoutes(createMockDb() as any, {} as any));
   app.use(errorHandler);
   return app;
 }
