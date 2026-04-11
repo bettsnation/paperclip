@@ -95,6 +95,7 @@ export type {
   PluginHealthDiagnostics,
   PluginConfigValidationResult,
   PluginWebhookInput,
+  PluginWebhookResponse,
 } from "./define-plugin.js";
 export type {
   TestHarness,

@@ -1010,14 +1010,15 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
     await handler(params.job);
   }
 
-  async function handleWebhook(params: PluginWebhookInput): Promise<void> {
+  async function handleWebhook(params: PluginWebhookInput): Promise<unknown> {
     if (!plugin.definition.onWebhook) {
       throw Object.assign(
         new Error("handleWebhook is not implemented by this plugin"),
         { code: PLUGIN_RPC_ERROR_CODES.METHOD_NOT_IMPLEMENTED },
       );
     }
-    await plugin.definition.onWebhook(params);
+    const result = await plugin.definition.onWebhook(params);
+    return result ?? undefined;
   }
 
   async function handleGetData(params: GetDataParams): Promise<unknown> {

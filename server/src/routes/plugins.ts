@@ -1977,7 +1977,7 @@ export function pluginRoutes(
 
     // Step 7: Dispatch to the worker via handleWebhook RPC
     try {
-      await webhookDeps.workerManager.call(plugin.id, "handleWebhook", {
+      const webhookResult = await webhookDeps.workerManager.call(plugin.id, "handleWebhook", {
         endpointKey,
         headers: req.headers as Record<string, string | string[]>,
         rawBody,
@@ -1997,10 +1997,21 @@ export function pluginRoutes(
         })
         .where(eq(pluginWebhookDeliveries.id, delivery.id));
 
-      res.status(200).json({
-        deliveryId: delivery.id,
-        status: "success",
-      });
+      // If the plugin returned a custom response object, use it
+      if (webhookResult && typeof webhookResult === "object" && ("body" in webhookResult || "status" in webhookResult || "headers" in webhookResult)) {
+        const customResponse = webhookResult as { status?: number; headers?: Record<string, string>; body?: unknown };
+        if (customResponse.headers) {
+          for (const [key, value] of Object.entries(customResponse.headers)) {
+            res.setHeader(key, value);
+          }
+        }
+        res.status(customResponse.status ?? 200).json(customResponse.body ?? { deliveryId: delivery.id, status: "success" });
+      } else {
+        res.status(200).json({
+          deliveryId: delivery.id,
+          status: "success",
+        });
+      }
     } catch (err) {
       // Step 8 (error): Update delivery record to failed
       const finishedAt = new Date();
