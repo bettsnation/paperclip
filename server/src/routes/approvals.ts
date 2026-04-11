@@ -1,7 +1,5 @@
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
-import { approvals as approvalsTable, issueApprovals, issues } from "@paperclipai/db";
-import { inArray } from "drizzle-orm";
 import {
   addApprovalCommentSchema,
   createApprovalSchema,
@@ -21,7 +19,6 @@ import {
 } from "../services/index.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { redactEventPayload } from "../redaction.js";
-import { notFound, unprocessable } from "../errors.js";
 
 function redactApprovalPayload<T extends { payload: Record<string, unknown> }>(approval: T): T {
   return {
@@ -84,57 +81,26 @@ export function approvalRoutes(db: Db) {
 
     const actor = getActorInfo(req);
 
-    // Create approval and link issues in a single transaction
-    const approval = await db.transaction(async (tx) => {
-      const [created] = await tx
-        .insert(approvalsTable)
-        .values({
-          companyId,
-          ...approvalInput,
-          payload: normalizedPayload,
-          requestedByUserId: actor.actorType === "user" ? actor.actorId : null,
-          requestedByAgentId:
-            approvalInput.requestedByAgentId ?? (actor.actorType === "agent" ? actor.actorId : null),
-          status: "pending",
-          decisionNote: null,
-          decidedByUserId: null,
-          decidedAt: null,
-          updatedAt: new Date(),
-        })
-        .returning();
-
-      if (uniqueIssueIds.length > 0) {
-        // Validate that all issues exist and belong to the same company
-        const issueRows = await tx
-          .select({ id: issues.id, companyId: issues.companyId })
-          .from(issues)
-          .where(inArray(issues.id, uniqueIssueIds));
-
-        if (issueRows.length !== uniqueIssueIds.length) {
-          throw notFound("One or more issues not found");
-        }
-        for (const row of issueRows) {
-          if (row.companyId !== companyId) {
-            throw unprocessable("Issue and approval must belong to the same company");
-          }
-        }
-
-        await tx
-          .insert(issueApprovals)
-          .values(
-            uniqueIssueIds.map((issueId) => ({
-              companyId,
-              issueId,
-              approvalId: created.id,
-              linkedByAgentId: actor.agentId ?? null,
-              linkedByUserId: actor.actorType === "user" ? actor.actorId : null,
-            })),
-          )
-          .onConflictDoNothing();
-      }
-
-      return created;
-    });
+    const approval = await svc.createWithIssueLinks(
+      companyId,
+      {
+        ...approvalInput,
+        payload: normalizedPayload,
+        requestedByUserId: actor.actorType === "user" ? actor.actorId : null,
+        requestedByAgentId:
+          approvalInput.requestedByAgentId ?? (actor.actorType === "agent" ? actor.actorId : null),
+        status: "pending",
+        decisionNote: null,
+        decidedByUserId: null,
+        decidedAt: null,
+        updatedAt: new Date(),
+      },
+      uniqueIssueIds,
+      {
+        agentId: actor.agentId ?? null,
+        userId: actor.actorType === "user" ? actor.actorId : null,
+      },
+    );
 
     await logActivity(db, {
       companyId,

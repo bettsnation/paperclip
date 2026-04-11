@@ -8,6 +8,7 @@ const mockApprovalService = vi.hoisted(() => ({
   list: vi.fn(),
   getById: vi.fn(),
   create: vi.fn(),
+  createWithIssueLinks: vi.fn(),
   approve: vi.fn(),
   reject: vi.fn(),
   requestRevision: vi.fn(),
@@ -44,24 +45,6 @@ vi.mock("../services/index.js", () => ({
   secretService: () => mockSecretService,
 }));
 
-/**
- * Build a minimal mock db for approval routes.
- * The create handler uses `db.transaction()` with raw drizzle calls.
- */
-function createMockDb(txResult?: unknown, issueRows?: Array<{ id: string; companyId: string }>) {
-  const onConflictDoNothing = vi.fn().mockResolvedValue(undefined);
-  const returning = vi.fn().mockResolvedValue([txResult ?? {}]);
-  const values = vi.fn(() => ({ returning, onConflictDoNothing }));
-  const insert = vi.fn(() => ({ values }));
-  const where = vi.fn().mockResolvedValue(issueRows ?? []);
-  const from = vi.fn(() => ({ where }));
-  const select = vi.fn(() => ({ from }));
-  const tx = { insert, select };
-  return {
-    transaction: vi.fn(async (fn: (tx: any) => Promise<any>) => fn(tx)),
-  };
-}
-
 function createApp() {
   const app = express();
   app.use(express.json());
@@ -80,7 +63,7 @@ function createApp() {
   return app;
 }
 
-function createAgentApp(db?: any) {
+function createAgentApp() {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
@@ -93,7 +76,7 @@ function createAgentApp(db?: any) {
     };
     next();
   });
-  app.use("/api", approvalRoutes(db ?? ({} as any)));
+  app.use("/api", approvalRoutes({} as any));
   app.use(errorHandler);
   return app;
 }
@@ -165,11 +148,9 @@ describe("approval routes idempotent retries", () => {
       updatedAt: new Date("2026-04-06T00:00:00.000Z"),
     };
 
-    const mockDb = createMockDb(createdApproval, [
-      { id: "00000000-0000-0000-0000-000000000001", companyId: "company-1" },
-    ]);
+    mockApprovalService.createWithIssueLinks.mockResolvedValue(createdApproval);
 
-    const res = await request(createAgentApp(mockDb))
+    const res = await request(createAgentApp())
       .post("/api/companies/company-1/approvals")
       .send({
         type: "request_board_approval",
@@ -178,7 +159,18 @@ describe("approval routes idempotent retries", () => {
       });
 
     expect(res.status).toBe(201);
-    expect(mockDb.transaction).toHaveBeenCalledTimes(1);
+    expect(mockApprovalService.createWithIssueLinks).toHaveBeenCalledWith(
+      "company-1",
+      expect.objectContaining({
+        type: "request_board_approval",
+        requestedByAgentId: "agent-1",
+        requestedByUserId: null,
+        status: "pending",
+        decisionNote: null,
+      }),
+      ["00000000-0000-0000-0000-000000000001"],
+      { agentId: "agent-1", userId: null },
+    );
     expect(mockSecretService.normalizeHireApprovalPayloadForPersistence).not.toHaveBeenCalled();
     expect(mockLogActivity).toHaveBeenCalledWith(
       expect.anything(),

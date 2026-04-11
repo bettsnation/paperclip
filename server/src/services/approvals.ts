@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { approvalComments, approvals } from "@paperclipai/db";
+import { approvalComments, approvals, issueApprovals, issues } from "@paperclipai/db";
 import { notFound, unprocessable } from "../errors.js";
 import { redactCurrentUserText } from "../log-redaction.js";
 import { agentService } from "./agents.js";
@@ -98,6 +98,53 @@ export function approvalService(db: Db) {
         .values({ ...data, companyId })
         .returning()
         .then((rows) => rows[0]),
+
+    createWithIssueLinks: async (
+      companyId: string,
+      data: Omit<typeof approvals.$inferInsert, "companyId">,
+      issueIds: string[],
+      actor: { agentId?: string | null; userId?: string | null },
+    ) => {
+      const uniqueIssueIds = Array.from(new Set(issueIds));
+
+      return db.transaction(async (tx) => {
+        const [created] = await tx
+          .insert(approvals)
+          .values({ ...data, companyId })
+          .returning();
+
+        if (uniqueIssueIds.length > 0) {
+          const issueRows = await tx
+            .select({ id: issues.id, companyId: issues.companyId })
+            .from(issues)
+            .where(inArray(issues.id, uniqueIssueIds));
+
+          if (issueRows.length !== uniqueIssueIds.length) {
+            throw notFound("One or more issues not found");
+          }
+          for (const row of issueRows) {
+            if (row.companyId !== companyId) {
+              throw unprocessable("Issue and approval must belong to the same company");
+            }
+          }
+
+          await tx
+            .insert(issueApprovals)
+            .values(
+              uniqueIssueIds.map((issueId) => ({
+                companyId,
+                issueId,
+                approvalId: created.id,
+                linkedByAgentId: actor.agentId ?? null,
+                linkedByUserId: actor.userId ?? null,
+              })),
+            )
+            .onConflictDoNothing();
+        }
+
+        return created;
+      });
+    },
 
     approve: async (id: string, decidedByUserId: string, decisionNote?: string | null) => {
       const { approval: updated, applied } = await resolveApproval(
