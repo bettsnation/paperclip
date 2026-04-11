@@ -107,6 +107,24 @@ export interface PluginWebhookInput {
   requestId: string;
 }
 
+/**
+ * Custom HTTP response returned from `onWebhook`.
+ *
+ * When a plugin returns this from its webhook handler, the host uses
+ * the provided status/headers/body instead of the default
+ * `{ deliveryId, status: "success" }` response.
+ *
+ * @see PLUGIN_SPEC.md §13.7 — `handleWebhook`
+ */
+export interface PluginWebhookResponse {
+  /** HTTP status code (defaults to 200 if omitted). */
+  status?: number;
+  /** Additional HTTP response headers. */
+  headers?: Record<string, string>;
+  /** Response body — serialized as JSON if an object, sent as-is if a string. */
+  body?: unknown;
+}
+
 // ---------------------------------------------------------------------------
 // Plugin definition
 // ---------------------------------------------------------------------------
@@ -196,7 +214,7 @@ export interface PluginDefinition {
    * @param input - Webhook delivery metadata and payload
    * @see PLUGIN_SPEC.md §13.7 — `handleWebhook`
    */
-  onWebhook?(input: PluginWebhookInput): Promise<void>;
+  onWebhook?(input: PluginWebhookInput): Promise<void | PluginWebhookResponse>;
 }
 
 // ---------------------------------------------------------------------------

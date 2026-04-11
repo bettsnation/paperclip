@@ -43,6 +43,7 @@ import type {
   PluginHealthDiagnostics,
   PluginConfigValidationResult,
   PluginWebhookInput,
+  PluginWebhookResponse,
 } from "./define-plugin.js";
 
 // ---------------------------------------------------------------------------
@@ -373,7 +374,7 @@ export interface HostToWorkerMethods {
   /** @see PLUGIN_SPEC.md §13.6 */
   runJob: [params: RunJobParams, result: void];
   /** @see PLUGIN_SPEC.md §13.7 */
-  handleWebhook: [params: PluginWebhookInput, result: void];
+  handleWebhook: [params: PluginWebhookInput, result: void | PluginWebhookResponse];
   /** @see PLUGIN_SPEC.md §13.8 */
   getData: [params: GetDataParams, result: unknown];
   /** @see PLUGIN_SPEC.md §13.9 */
