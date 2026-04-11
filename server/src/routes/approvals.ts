@@ -15,6 +15,7 @@ import {
   approvalService,
   heartbeatService,
   issueApprovalService,
+  issueService,
   logActivity,
   secretService,
 } from "../services/index.js";
@@ -35,6 +36,7 @@ export function approvalRoutes(db: Db) {
   const heartbeat = heartbeatService(db);
   const issueApprovalsSvc = issueApprovalService(db);
   const secretsSvc = secretService(db);
+  const issueSvc = issueService(db);
   const strictSecretsMode = process.env.PAPERCLIP_SECRETS_STRICT_MODE === "true";
 
   router.get("/companies/:companyId/approvals", async (req, res) => {
@@ -188,6 +190,49 @@ export function approvalRoutes(db: Db) {
         },
       });
 
+      // Auto-advance pipeline when a pipeline_stage_approval is approved.
+      // Setting the linked issue to "done" triggers evaluatePipelineTransition
+      // which advances the pipeline to the next stage.
+      if (approval.type === "pipeline_stage_approval") {
+        for (const issueId of linkedIssueIds) {
+          try {
+            await issueSvc.update(issueId, { status: "done" }, db, {
+              onPipelineReassignment: (issue) => {
+                // Queue a wakeup for the next stage's agent
+                if (issue.assigneeAgentId) {
+                  heartbeat
+                    .wakeup(issue.assigneeAgentId, {
+                      source: "automation",
+                      triggerDetail: "system",
+                      reason: "issue_assigned",
+                      payload: { issueId: issue.id },
+                      requestedByActorType: "user",
+                      requestedByActorId: req.actor.userId ?? "board",
+                      contextSnapshot: {
+                        source: "pipeline_approval_advance",
+                        issueId: issue.id,
+                        taskId: issue.id,
+                        wakeReason: "issue_assigned",
+                      },
+                    })
+                    .catch((err: unknown) => {
+                      logger.warn(
+                        { err, issueId: issue.id, agentId: issue.assigneeAgentId },
+                        "failed to queue wakeup after pipeline approval advance",
+                      );
+                    });
+                }
+              },
+            });
+          } catch (err) {
+            logger.warn(
+              { err, approvalId: approval.id, issueId },
+              "failed to advance pipeline after approval",
+            );
+          }
+        }
+      }
+
       if (approval.requestedByAgentId) {
         try {
           const wakeRun = await heartbeat.wakeup(approval.requestedByAgentId, {
@@ -265,6 +310,9 @@ export function approvalRoutes(db: Db) {
     );
 
     if (applied) {
+      const linkedIssues = await issueApprovalsSvc.listIssuesForApproval(approval.id);
+      const linkedIssueIds = linkedIssues.map((issue) => issue.id);
+
       await logActivity(db, {
         companyId: approval.companyId,
         actorType: "user",
@@ -272,8 +320,49 @@ export function approvalRoutes(db: Db) {
         action: "approval.rejected",
         entityType: "approval",
         entityId: approval.id,
-        details: { type: approval.type },
+        details: { type: approval.type, linkedIssueIds },
       });
+
+      // Trigger pipeline rejection when a pipeline_stage_approval is rejected.
+      // Setting "changes_requested" triggers evaluatePipelineTransition's rejection path.
+      if (approval.type === "pipeline_stage_approval") {
+        for (const issueId of linkedIssueIds) {
+          try {
+            await issueSvc.update(issueId, { status: "changes_requested" }, db, {
+              onPipelineReassignment: (issue) => {
+                if (issue.assigneeAgentId) {
+                  heartbeat
+                    .wakeup(issue.assigneeAgentId, {
+                      source: "automation",
+                      triggerDetail: "system",
+                      reason: "issue_assigned",
+                      payload: { issueId: issue.id },
+                      requestedByActorType: "user",
+                      requestedByActorId: req.actor.userId ?? "board",
+                      contextSnapshot: {
+                        source: "pipeline_approval_rejected",
+                        issueId: issue.id,
+                        taskId: issue.id,
+                        wakeReason: "issue_assigned",
+                      },
+                    })
+                    .catch((err: unknown) => {
+                      logger.warn(
+                        { err, issueId: issue.id, agentId: issue.assigneeAgentId },
+                        "failed to queue wakeup after pipeline approval rejection",
+                      );
+                    });
+                }
+              },
+            });
+          } catch (err) {
+            logger.warn(
+              { err, approvalId: approval.id, issueId },
+              "failed to trigger pipeline rejection after approval rejected",
+            );
+          }
+        }
+      }
     }
 
     res.json(redactApprovalPayload(approval));
